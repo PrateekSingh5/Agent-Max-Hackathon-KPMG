@@ -1,0 +1,23 @@
+{
+  "invoice_number": "No2024136",
+  "date": "2025-01-23",
+  "seller": "agoda",
+  "buyer": {
+    "name": "Ananya Agarwal",
+    "email": "ananya.agarwal37@company.com"
+  },
+  "booking_details": {
+    "property_name": "Crystal Hotel Hotel",
+    "property_address": "Sector 3, Hyderabad, India",
+    "booking_number": "405198924",
+    "payment_reference": "MEQ8K-JIX",
+    "check_in": "2025-01-26",
+    "check_out": "2025-02-03"
+  },
+  "amount_paid": {
+    "date": "2025-01-23",
+    "value": 18024,
+    "currency": "INR"
+  },
+  "Employee ID": "E1023"
+}
