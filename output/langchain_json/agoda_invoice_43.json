@@ -1,7 +1,7 @@
 {
   "invoice_number": "No20245551",
   "date": "2024-11-04",
-  "seller": "agoda",
+  "vendor": "agoda",
   "buyer": {
     "name": "Vihaan Nair",
     "email": "vihaan.nair11@company.com"
@@ -17,6 +17,6 @@
   "total_amount": 10535,
   "currency": "INR",
   "category": "hotel",
-  "Employee ID": "E1024",
+  "Employee ID": "E1090",
   "_source_file": "agoda_invoice_43.png"
 }
