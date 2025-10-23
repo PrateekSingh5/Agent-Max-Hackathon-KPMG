@@ -6,15 +6,17 @@ import json
 import time
 from pathlib import Path
 from datetime import date, datetime
-
 import requests
 import streamlit as st
+import pandas as pd
+from sqlalchemy import create_engine, text
 import agent as _agent  # your module
+from db_utils import save_expense_claim  # uses lowercase details/others_* columns
 
 # ----------------------------
 # Page config
 # ----------------------------
-st.set_page_config(page_title="AgentMax – Extractor", layout="wide")
+st.set_page_config(page_title="AgentMax – Extractor & Claims", layout="wide")
 
 # ----------------------------
 # Config
@@ -27,6 +29,10 @@ input_dir = Path("./input/images")
 input_dir.mkdir(parents=True, exist_ok=True)
 
 AGENT_ENDPOINT = f"{BASE_API}/api/Agent"   # unified endpoint
+
+# Dashboard DB read config (adjust to your DSN)
+# DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://myuser:rootpassword@localhost:5432/agent_max")
+# _engine = create_engine(DATABASE_URL, future=True)
 
 # ----------------------------
 # Helpers
@@ -54,6 +60,70 @@ def deep_get(d, path, default=None):
         cur = cur[part]
     return cur
 
+# ----------------------------
+# Claims Dashboard
+# ----------------------------
+
+
+
+# def load_recent_claims(employee_id: str, limit: int = 50):
+#     sql = """
+#         SELECT
+#             ec.claim_id,
+#             ec.employee_id,
+#             COALESCE(NULLIF(TRIM(CONCAT(e.first_name, ' ', e.last_name)), ''), ec.employee_id) AS user_name,
+#             ec.expense_category AS claim_type,
+#             ec.amount,
+#             ec.currency,
+#             ec.status,
+#             ec.vendor_id AS vendor_name,
+#             ec.claim_date
+#         FROM expense_claims ec
+#         LEFT JOIN employees e ON e.employee_id = ec.employee_id
+#         WHERE ec.employee_id = %(emp_id)s
+#         ORDER BY ec.claim_date DESC, ec.claim_id DESC
+#         LIMIT %(limit)s
+#     """
+#     with _engine.connect() as conn:
+#         return pd.read_sql_query(sql, conn, params={"emp_id": employee_id, "limit": int(limit)})
+
+def show_claims_dashboard():
+    from claims_dashboard import load_recent_claims
+    """Render claims dashboard filtered by logged-in employee."""
+    # st.title("💼 My Expense Claims")
+    st.caption("Showing your most recent claims")
+
+    # Get the logged-in employee ID from session
+    employee_id = st.session_state.emp_id
+    # st.write(employee_id)
+
+
+    if not employee_id:
+        st.warning("⚠️ Please log in to view your claims.")
+        return
+
+    try:
+        df = load_recent_claims(employee_id, 50)
+        if df.empty:
+            st.info("You have not submitted any claims yet.")
+        else:
+            st.dataframe(
+                df,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "claim_id": "Claim ID",
+                    "user_name": "Employee Name",
+                    "claim_type": "Claim Type",
+                    "amount": st.column_config.NumberColumn(format="₹ %.2f"),
+                    "currency": "Currency",
+                    "status": "Status",
+                    "vendor_name": "Vendor",
+                    "claim_date": st.column_config.DatetimeColumn(format="YYYY-MM-DD"),
+                },
+            )
+    except Exception as e:
+        st.error(f"Failed to load claims: {e}")
 # ----------------------------
 # UI: Extractor Node (Human-in-the-loop)
 # ----------------------------
@@ -135,7 +205,6 @@ def extractor_node_ui(emp_id: str, output_dir: str, input_dir: Path):
 
     # ----- Render form from payload -----
     payload = st.session_state.extracted_payload or {}
-    file_path = st.session_state.uploaded_image_path
 
     if not isinstance(payload, dict) or not payload:
         st.warning("No payload returned from API.")
@@ -186,7 +255,7 @@ def extractor_node_ui(emp_id: str, output_dir: str, input_dir: Path):
             buyer_name = st.text_input("buyer.name", value=deep_get(payload, "buyer.name", ""))
         with c[1]:
             buyer_email = st.text_input("buyer.email", value=deep_get(payload, "buyer.email", ""))
-        # c[2], c[3], c[4] left intentionally unused for consistent 5-col layout
+        # c[2], c[3], c[4] intentionally empty to keep 5-col grid
 
         st.write("**Seller**")
         c = st.columns(5)
@@ -194,7 +263,7 @@ def extractor_node_ui(emp_id: str, output_dir: str, input_dir: Path):
             seller_hotel = st.text_input("seller.hotel_name", value=deep_get(payload, "seller.hotel_name", ""))
         with c[1]:
             seller_location = st.text_input("seller.location", value=deep_get(payload, "seller.location", "") or "")
-        # c[2], c[3], c[4] unused
+        # c[2], c[3], c[4] empty
 
         st.markdown("---")
         st.write("**Booking Details**")
@@ -207,11 +276,11 @@ def extractor_node_ui(emp_id: str, output_dir: str, input_dir: Path):
             check_in = st.date_input("booking_details.check_in", value=parse_iso_date(deep_get(payload, "booking_details.check_in", to_iso(date.today()))))
         with c[3]:
             check_out = st.date_input("booking_details.check_out", value=parse_iso_date(deep_get(payload, "booking_details.check_out", to_iso(date.today()))))
-        # c[4] unused
+        # c[4] empty
 
         submitted = st.form_submit_button("Submit")
 
-    # ----- After form submit: keep items unchanged & simple confirmation -----
+    # ----- After form submit: keep items unchanged & persist to DB -----
     if submitted:
         # Keep items read-only (as returned by API)
         items = payload.get("items", [])
@@ -226,43 +295,7 @@ def extractor_node_ui(emp_id: str, output_dir: str, input_dir: Path):
             "items": items,  # unchanged
             "invoice_number": invoice_number,
             "date": to_iso(inv_date),
-            "seller": {
-                "hotel_name": seller_hotel,
-                "location": seller_location if (seller_location or "").strip() else None
-            },
-            "buyer": {
-                "name": buyer_name,
-                "email": buyer_email
-            },
-            "booking_details": {
-                "booking_number": booking_number,
-                "payment_reference": payment_reference,
-                "check_in": to_iso(check_in),
-                "check_out": to_iso(check_out)
-            },
-            "total": round(float(total), 2),
-            "category": category or "hotel"
-        }
-        st.session_state.last_payload = payload_out
-        st.session_state.ui_step = "form"
-        st.success("Form saved. Items remain unchanged (read-only).")
-
-
-
-
-        from db_utils import save_expense_claim
-        items = payload.get("items", [])
-        payload_out = {
-            "invoice_id": invoice_id,
-            "employee_id": employee_id or emp_id,
-            "expense_date": to_iso(expense_date),
-            "vendor": vendor,
-            "total_amount": round(float(total_amount), 2),
-            "currency": currency,
-            "items": items,
-            "invoice_number": invoice_number,
-            "date": to_iso(inv_date),
-            "seller": {"hotel_name": seller_hotel, "location": seller_location or None},
+            "seller": {"hotel_name": seller_hotel, "location": (seller_location or "").strip() or None},
             "buyer": {"name": buyer_name, "email": buyer_email},
             "booking_details": {
                 "booking_number": booking_number,
@@ -273,19 +306,15 @@ def extractor_node_ui(emp_id: str, output_dir: str, input_dir: Path):
             "total": round(float(total), 2),
             "category": category or "hotel"
         }
-
         st.session_state.last_payload = payload_out
         st.session_state.ui_step = "form"
 
+        # Save to DB
         try:
             claim_id = save_expense_claim(payload_out)
             st.success(f"✅ Expense Claim saved successfully! Claim ID: **{claim_id}**")
         except Exception as e:
             st.error(f"❌ Database insert failed: {e}")
-
-
-
-
 
     # ----- Read-only items view (optional) -----
     if isinstance(payload.get("items", None), list):
@@ -314,7 +343,7 @@ def extractor_node_ui(emp_id: str, output_dir: str, input_dir: Path):
                     st.error(f"Connection error: {e}")
 
 # ----------------------------
-# Dashboard
+# Dashboard wrapper
 # ----------------------------
 def dashboard(emp_id: str, output_dir: str, input_dir: Path):
     st.divider()
@@ -360,7 +389,8 @@ def check_credentials(username: str, password: str) -> bool:
     rec = _agent.load_employee_by_email(username)
     if not rec:
         return False
-    return password == "password"  # replace with a real check
+    # Replace with real password verification
+    return password == "password"
 
 def get_user_details(username: str):
     return _agent.load_employee_by_email(username)
@@ -387,20 +417,15 @@ def logout_callback():
     st.rerun()
 
 # ----------------------------
-# Sidebar (when logged in)
+# Sidebar + Router
 # ----------------------------
 if st.session_state.authenticated:
     with st.sidebar:
         st.write(f"**Signed in as:** {st.session_state.username} 🧑‍💻")
+        page = st.radio("Navigate", ["Upload Bill", "Claims Dashboard", "Bill Approve"], key="nav_radio")
         st.button("Logout", on_click=logout_callback, key="logout_sidebar_btn")
 
-# ----------------------------
-# Router
-# ----------------------------
-if st.session_state.authenticated:
     user_name = st.session_state.user_details.get('name', 'User')
-    user_role = st.session_state.user_details.get('role', 'User')
-
     st.subheader(f"Welcome back, {user_name}! 👋")
 
     details = get_user_details(st.session_state.username)
@@ -410,7 +435,16 @@ if st.session_state.authenticated:
         st.session_state.manager_id = details.get('manager_id')
         st.session_state.first_name = details.get('first_name')
 
-    dashboard(st.session_state.emp_id, OUTPUT_DIR, input_dir)
+    if page == "Upload Bill":
+        dashboard(st.session_state.emp_id, OUTPUT_DIR, input_dir)
+
+    elif page == "Claims Dashboard":
+        show_claims_dashboard()
+
+
+    elif page == "Bill Approve":
+        st.write("Add Bill Approve Features")
+        # dashboard(st.session_state.emp_id, OUTPUT_DIR, input_dir)
 
 else:
     st.error("🔒 Session Expired or Not Logged In. Please sign in to continue.")
@@ -423,12 +457,14 @@ else:
             st.subheader("User Login")
             username = st.text_input("Email:", key="login_username")
             password = st.text_input("Password:", type="password", key="login_password")
-
             submitted_login = st.form_submit_button("Sign In", use_container_width=True)
-
             if submitted_login:
                 login_callback(username, password)
                 if st.session_state.authenticated:
                     st.rerun()
                 elif st.session_state.login_error:
                     st.error(st.session_state.login_error)
+
+
+# ===============================
+
