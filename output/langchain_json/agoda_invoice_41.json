@@ -9,12 +9,14 @@
   "booking_details": {
     "property_name": "Regal Resort Suites",
     "property_address": "Road 35, Mumbai, India",
-    "booking_number": "803472364",
-    "payment_reference": "TGF4-UBD",
+    "booking_number": "8034722364",
+    "payment_reference": "TEF4-UBD",
     "check_in": "2024-12-23",
-    "check_out": "2025-01-03",
-    "amount_paid": 24684.0,
-    "currency": "INR"
+    "check_out": "2025-01-03"
   },
-  "Employee ID": "E1034"
+  "total_amount": 24684,
+  "currency": "INR",
+  "category": "hotel",
+  "Employee ID": "E1024",
+  "_source_file": "agoda_invoice_41.png"
 }

@@ -1,0 +1,59 @@
+{
+  "invoice_number": "6541/83-54",
+  "date": "2025-03-21T12:12:00",
+  "seller": {
+    "name": "Delhi Delight",
+    "address": "11 Curry Lane, Mumbai",
+    "gstin": "PTLTZLFYH0X6D0Y"
+  },
+  "buyer": {
+    "user": "Vivaan"
+  },
+  "items": [
+    {
+      "description": "Palak Paneer",
+      "quantity": 2,
+      "rate": 45.67,
+      "amount": 91.34
+    },
+    {
+      "description": "Butter Chicken",
+      "quantity": 2,
+      "rate": 62.1,
+      "amount": 124.2
+    },
+    {
+      "description": "Paneer Butter Masala",
+      "quantity": 4,
+      "rate": 51.8,
+      "amount": 207.2
+    },
+    {
+      "description": "Tandoori Chicken",
+      "quantity": 3,
+      "rate": 149.48,
+      "amount": 448.44
+    },
+    {
+      "description": "Mango Lassi",
+      "quantity": 4,
+      "rate": 167.26,
+      "amount": 669.04
+    },
+    {
+      "description": "Paneer Butter Masala",
+      "quantity": 2,
+      "rate": 177.28,
+      "amount": 354.56
+    }
+  ],
+  "total": 2179.0,
+  "tax": {
+    "serc": 189.48,
+    "state_gst": 47.37,
+    "central_gst": 47.37
+  },
+  "category": "food",
+  "Employee ID": "E1024",
+  "_source_file": "meal_receipt_03.pdf"
+}

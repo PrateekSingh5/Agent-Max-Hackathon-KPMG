@@ -1,0 +1,21 @@
+{
+  "invoice_number": "HT-2903-002",
+  "date": "2025-03-20",
+  "seller": {
+    "hotel_name": "Heritage Resort",
+    "location": "Hyderabad, India"
+  },
+  "buyer": {
+    "name": "Aditya Nair",
+    "email": "aditya.nair9@company.com"
+  },
+  "booking_details": {
+    "check_in": "2025-03-23",
+    "check_out": "2025-03-29"
+  },
+  "total": 12216.0,
+  "currency": "INR",
+  "category": "hotel",
+  "Employee ID": "E1024",
+  "_source_file": "hotel_invoice_02.pdf"
+}

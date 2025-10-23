@@ -1,0 +1,22 @@
+{
+  "invoice_number": "No20247555",
+  "date": "2024-10-28",
+  "seller": "agoda",
+  "buyer": {
+    "name": "Arjun Sharma",
+    "email": "arjun.sharma56@company.com"
+  },
+  "booking_details": {
+    "property_name": "Grand Residency Hotel",
+    "property_address": "Sector 13, Mumbai, India",
+    "booking_number": "381806313",
+    "payment_reference": "YZHZ-FVY",
+    "check_in": "2024-11-02",
+    "check_out": "2024-11-13"
+  },
+  "total_amount": 20537,
+  "currency": "INR",
+  "category": "hotel",
+  "Employee ID": "E1024",
+  "_source_file": "agoda_invoice_45.png"
+}

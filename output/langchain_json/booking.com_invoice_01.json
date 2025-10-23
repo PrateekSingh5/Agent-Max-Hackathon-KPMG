@@ -1,0 +1,25 @@
+{
+  "invoice_number": "No2025221",
+  "date": "2024-11-02",
+  "category": "hotel",
+  "vendor": "Booking.com",
+  "buyer": {
+    "name": "Vihaan Nair",
+    "email": "vihaan.nair11@company.com"
+  },
+  "booking_details": {
+    "property_name": "Sunshine Hotel Lodge",
+    "property_address": "Sector 33, Bengaluru, India",
+    "booking_number": "333186918",
+    "payment_reference": "W2WV-IPI",
+    "check_in": "2024-11-04",
+    "check_out": "2024-11-17"
+  },
+  "amount_paid": {
+    "date": "2024-11-02",
+    "total_amount": 25532.0,
+    "currency": "INR"
+  },
+  "Employee ID": "E1024",
+  "_source_file": "booking.com_invoice_01.png"
+}

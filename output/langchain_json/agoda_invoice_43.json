@@ -1,0 +1,22 @@
+{
+  "invoice_number": "No20245551",
+  "date": "2024-11-04",
+  "seller": "agoda",
+  "buyer": {
+    "name": "Vihaan Nair",
+    "email": "vihaan.nair11@company.com"
+  },
+  "booking_details": {
+    "property_name": "Grand Residency Hotel",
+    "property_address": "Sector 40, Bengaluru, India",
+    "booking_number": "416487743",
+    "payment_reference": "03RH-CNY",
+    "check_in": "2024-11-07",
+    "check_out": "2024-11-12"
+  },
+  "total_amount": 10535,
+  "currency": "INR",
+  "category": "hotel",
+  "Employee ID": "E1024",
+  "_source_file": "agoda_invoice_43.png"
+}
