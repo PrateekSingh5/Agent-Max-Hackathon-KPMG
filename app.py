@@ -12,6 +12,8 @@ from pathlib import Path
 import agent as _agent
 import os
 
+from fastapi.encoders import jsonable_encoder
+
 
 app = _fastapi.FastAPI()
 
@@ -102,57 +104,212 @@ async def extractor_agent(
     final_state  = _agent.extract_node(state)
     return final_state
 
-@app.post("/api/Agent", response_model=List[_schema.ExpenseClaims])
-async def agent_state(
-    image_name: str = Query(..., description="Name of the image file"),
-    emp_id: str = Query(..., description="Enter Employee ID"),
-    json_out_dir: str = Query(..., description="Directory to save JSON output"),
-    save_json_file: bool = Query(..., description="Flag to save JSON file"),
+
+
+@app.post("/api/Agent", response_class=JSONResponse, status_code=status.HTTP_200_OK)
+async def agent_router(
+    request: Request,
+    # Query fallbacks (body is also supported; see pick() below)
+    image_name: str | None = Query(default=None, description="Path to file on server (image/pdf)"),
+    emp_id: str | None = Query(default=None, description="Employee ID"),
+    json_out_dir: str = Query(default="./output/langchain_json", description="Directory to save JSON"),
+    save_json_file: bool = Query(default=True, description="Save extracted JSON file"),
+    phase: str = Query(default="extract", description="extract | validate | full"),
 ):
+    """
+    Unified Agent endpoint:
+      - phase=extract  : run extraction only, return normalized payload for UI
+      - phase=validate : expects edited JSON payload in body; runs policy validation only
+      - phase=full     : extract + validate in one shot (minimal summary)
+    """
+    phase = (phase or "extract").lower()
 
-    state = {"file_path": image_name , 
-            "employee_id_hint": emp_id,
-            "json_out_dir": json_out_dir,
-            "save_json_file": save_json_file
-            }
-    
+    # Read JSON body once (if present)
+    body: dict | None = None
+    try:
+        body = await request.json()
+        if not isinstance(body, dict):
+            body = None
+    except Exception:
+        body = None
 
-    
+    # Capture query args in a map so inner pick() can read them
+    query_map = {
+        "image_name": image_name,
+        "emp_id": emp_id,
+        "json_out_dir": json_out_dir,
+        "save_json_file": save_json_file,
+        "phase": phase,
+    }
 
-    final_state  = _agent.graph.invoke(state)
+    # Resolver: prefer query param, then body field, then provided fallbacks
+    def pick(field_name: str, *fallbacks):
+        # 1) value from query map
+        val = query_map.get(field_name, None)
+        if val is not None:
+            return val
+        # 2) value from JSON body
+        if body and (field_name in body) and (body[field_name] is not None):
+            return body[field_name]
+        # 3) fallbacks
+        for fb in fallbacks:
+            if fb is not None:
+                return fb
+        return None
 
-    # --- Extract fields for response ---
-    validation = final_state.get("validation")
+    # -------------------------
+    # VALIDATE ONLY (human-in-loop)
+    # -------------------------
+    if phase == "validate":
+        if not body:
+            raise HTTPException(status_code=400, detail="Expected JSON body for phase=validate")
 
-    # Guard for missing validation results
-    if not validation:
+        # Coerce to canonical schema (handles dates/totals/items/category normalization)
+        try:
+            inv = _agent.InvoicePayload(**body)
+        except Exception as e:
+            raise HTTPException(status_code=422, detail=f"Invalid payload: {e}")
+
+        if not inv.employee_id:
+            raise HTTPException(status_code=400, detail="employee_id is required in the payload")
+
+        # Load employee row
+        employees_df = _agent.load_employees_df(inv.employee_id)
+        if employees_df.empty:
+            return JSONResponse(
+                content=jsonable_encoder({
+                    "Final tag": "Reject",
+                    "Decision": "Reject",
+                    "Findings": [{
+                        "severity": "HARD",
+                        "rule_id": "EMP-404",
+                        "message": f"Employee '{inv.employee_id}' not found"
+                    }]
+                }),
+                status_code=200
+            )
+
+        # Resolve grade → fetch policies
+        emp_grade = employees_df["grade"].iloc[0] if "grade" in employees_df.columns else None
+        if not emp_grade:
+            return JSONResponse(
+                content=jsonable_encoder({
+                    "Final tag": "Send for validation",
+                    "Decision": "Send for validation",
+                    "Findings": [{
+                        "severity": "SOFT",
+                        "rule_id": "EMP-000",
+                        "message": "Employee grade not available; manual review required"
+                    }]
+                }),
+                status_code=200
+            )
+
+        policies_df = _agent.load_policies_df(emp_grade)
+
+        # Run validation
+        validator = _agent.ValidationAgent(employees_df, policies_df)
+        result = validator.validate(inv)
+
+        findings_list = [{
+            "severity": f.severity,
+            "rule_id": f.rule_id,
+            "message": f.message
+        } for f in (result.findings or [])]
+
         return JSONResponse(
-            content={
-                "Final tag": final_state.get("tag"),
-                "Decision": None,
-                "Findings": [],
-                "error": "Validation stage failed or missing"
-            },
-            status_code=500
+            content=jsonable_encoder({
+                "Final tag": result.decision.value,
+                "Decision": result.decision.value,
+                "Findings": findings_list
+            }),
+            status_code=200
         )
 
-    findings_list = []
-    if getattr(validation, "findings", None):
-        for f in validation.findings:
-            findings_list.append({
-                "severity": f.severity,
-                "rule_id": f.rule_id,
-                "message": f.message
-            })
+    # -------------------------
+    # EXTRACT ONLY (for UI form)
+    # -------------------------
+    if phase == "extract":
+        img = pick("image_name")
+        eid = pick("emp_id")
+        outdir = pick("json_out_dir", "./output/langchain_json")
+        save = bool(pick("save_json_file", True))
 
-    # --- Return minimal structured response ---
-    return JSONResponse(
-        content={
-            "Final tag": final_state.get("tag"),
-            "Decision": validation.decision.value if validation.decision else None,
-            "Findings": findings_list
+        if not img:
+            raise HTTPException(status_code=400, detail="image_name is required for phase=extract")
+
+        state = {
+            "file_path": img,
+            "employee_id_hint": eid,
+            "json_out_dir": outdir,
+            "save_json_file": save,
         }
-    )
+        # Extract node only (no validation yet)
+        state = _agent.extract_node(state)
+        extraction = state.get("extraction")
+        if not extraction:
+            raise HTTPException(status_code=500, detail="Extraction failed")
 
+        # Ensure JSON-safe payload (dates → ISO)
+        payload_dict = extraction.payload.model_dump(mode="json")
 
-    
+        return JSONResponse(
+            content=jsonable_encoder({
+                "extraction": {
+                    "payload": payload_dict,
+                    "ocr_engine": extraction.ocr_engine,
+                    "raw_text_preview": extraction.raw_text_preview
+                }
+            }),
+            status_code=200
+        )
+
+    # -------------------------
+    # FULL (extract + validate)
+    # -------------------------
+    if phase == "full":
+        img = pick("image_name")
+        eid = pick("emp_id")
+        outdir = pick("json_out_dir", "./output/langchain_json")
+        save = bool(pick("save_json_file", True))
+
+        if not img:
+            raise HTTPException(status_code=400, detail="image_name is required for phase=full")
+
+        state = {
+            "file_path": img,
+            "employee_id_hint": eid,
+            "json_out_dir": outdir,
+            "save_json_file": save
+        }
+        final_state = _agent.graph.invoke(state)
+
+        validation = final_state.get("validation")
+        if not validation:
+            return JSONResponse(
+                content=jsonable_encoder({
+                    "Final tag": final_state.get("tag"),
+                    "Decision": None,
+                    "Findings": [],
+                    "error": "Validation stage failed or missing"
+                }),
+                status_code=500
+            )
+
+        findings_list = [{
+            "severity": f.severity,
+            "rule_id": f.rule_id,
+            "message": f.message
+        } for f in (validation.findings or [])]
+
+        return JSONResponse(
+            content=jsonable_encoder({
+                "Final tag": final_state.get("tag"),
+                "Decision": validation.decision.value if validation.decision else None,
+                "Findings": findings_list
+            }),
+            status_code=200
+        )
+
+    # Unknown phase
+    raise HTTPException(status_code=400, detail="phase must be one of: extract | validate | full")
