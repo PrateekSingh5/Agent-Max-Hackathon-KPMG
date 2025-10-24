@@ -1,7 +1,8 @@
 {
   "invoice_number": "No2024328",
   "date": "2024-09-26",
-  "seller": "agoda",
+  "vendor": "agoda",
+  "category": "hotel",
   "buyer": {
     "name": "Saanvi Verma",
     "email": "saanvi.verma111@company.com"
@@ -14,9 +15,7 @@
     "check_in": "2024-09-30",
     "check_out": "2024-10-01"
   },
-  "total_amount": 2121,
-  "currency": "INR",
-  "category": "hotel",
+  "total_amount": 2121.0,
   "Employee ID": "E1024",
   "_source_file": "agoda_invoice_42.png"
 }

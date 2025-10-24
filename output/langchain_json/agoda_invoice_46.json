@@ -1,0 +1,22 @@
+{
+  "invoice_number": "No2024355",
+  "date": "2025-02-16",
+  "seller": "agoda",
+  "buyer": {
+    "name": "Diya Reddy",
+    "email": "diya.reddy68@company.com"
+  },
+  "booking_details": {
+    "property_name": "Emerald Retreat Inn",
+    "property_address": "Road 1, Noida, India",
+    "booking_number": "353578779",
+    "payment_reference": "Z1B7-BRU",
+    "check_in": "2025-02-19",
+    "check_out": "2025-03-04"
+  },
+  "total_amount": 28873,
+  "currency": "INR",
+  "category": "hotel",
+  "Employee ID": "E1024",
+  "_source_file": "agoda_invoice_46.png"
+}
