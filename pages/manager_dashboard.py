@@ -1,39 +1,74 @@
-# st.py
-
 import os
 import re
 import json
 import time
 from pathlib import Path
 from datetime import date, datetime
+
 import requests
-import streamlit as st
 import pandas as pd
 from sqlalchemy import create_engine, text
-import agent as _agent  # your module
-from db_utils import save_expense_claim  # uses lowercase details/others_* columns
+import streamlit as st
 
-# ----------------------------
-# Page config
-# ----------------------------
-st.set_page_config(page_title="AgentMax – Extractor & Claims", layout="wide")
+import agent as _agent            # your module
+from db_utils import save_expense_claim  # writes to DB
+from claims_dashboard import load_recent_claims  # import your loader
+import db_utils 
 
-# ----------------------------
-# Config
-# ----------------------------
+# -------------------------------------------------
+# PAGE CONFIG (must be first Streamlit call)
+# -------------------------------------------------
+st.set_page_config(page_title="Employee Dashboard", layout="wide")
+
+# -------------------------------------------------
+# CONSTANTS
+# -------------------------------------------------
 BASE_API = "http://localhost:8000"
+AGENT_ENDPOINT = f"{BASE_API}/api/Agent"
+
 OUTPUT_DIR = "output/langchain_json"
 Path(OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
 
 input_dir = Path("./input/images")
 input_dir.mkdir(parents=True, exist_ok=True)
 
-AGENT_ENDPOINT = f"{BASE_API}/api/Agent"   # unified endpoint
+# -------------------------------------------------
+# SESSION ENFORCERS AND NAV HELPERS
+# -------------------------------------------------
+def do_logout_and_return():
+    # mirror logout in test_portal_login.py
+    st.session_state.logged_in = False
+    st.session_state.email = None
+    st.session_state.access_label = None
+    st.session_state.allowed_views = []
+    st.switch_page("test_portal_login.py")
 
+def go_manager():
+    st.switch_page("pages/manager_dashboard.py")
 
-# ----------------------------
-# Helpers
-# ----------------------------
+def go_finance():
+    st.switch_page("pages/finance_dashboard.py")
+
+def ensure_employee_allowed():
+    """
+    Must be logged in AND have access_label in {"E","M"}.
+    Otherwise redirect or stop.
+    """
+    if not st.session_state.get("logged_in", False):
+        st.error("Please login first.")
+        if st.button("Go to Login"):
+            st.switch_page("test_portal_login.py")
+        st.stop()
+
+    access_label = st.session_state.get("access_label", "")
+    if access_label not in {"E", "M"}:
+        st.error("Access denied. Employee portal only.")
+        st.sidebar.button("Logout", on_click=do_logout_and_return)
+        st.stop()
+
+# -------------------------------------------------
+# SMALL HELPERS
+# -------------------------------------------------
 def parse_iso_date(s: str) -> date:
     """Parse YYYY-MM-DD; fallback to today on error."""
     try:
@@ -49,7 +84,7 @@ def to_iso(d: date | str | None) -> str | None:
     return d.isoformat()
 
 def deep_get(d, path, default=None):
-    """Safely get a nested key: deep_get(resp, 'extraction.payload.seller.hotel_name', '')"""
+    """Safely get a nested key by dotted path."""
     cur = d or {}
     for part in path.split('.'):
         if not isinstance(cur, dict) or part not in cur:
@@ -57,22 +92,16 @@ def deep_get(d, path, default=None):
         cur = cur[part]
     return cur
 
-
-# ----------------------------
-# Claims Dashboard (Status tab)
-# ----------------------------
+# -------------------------------------------------
+# CLAIMS DASHBOARD (for this employee only)
+# -------------------------------------------------
 def show_claims_dashboard():
-    """
-    Render claims dashboard filtered by logged-in employee.
-    """
-    from claims_dashboard import load_recent_claims
-
+    st.header("💼 My Expense Claims")
     st.caption("Showing your most recent claims")
 
-    employee_id = st.session_state.emp_id
-
+    employee_id = st.session_state.get("emp_id")
     if not employee_id:
-        st.warning("⚠️ Please log in to view your claims.")
+        st.warning("⚠️ Missing employee_id in session.")
         return
 
     try:
@@ -98,20 +127,16 @@ def show_claims_dashboard():
     except Exception as e:
         st.error(f"Failed to load claims: {e}")
 
-
-# ----------------------------
-# UI: Extractor Node (Upload Files tab)
-# ----------------------------
+# -------------------------------------------------
+# EXTRACTOR NODE UI
+# -------------------------------------------------
 def extractor_node_ui(emp_id: str, output_dir: str, input_dir: Path):
     """
-    Human-in-the-loop Extractor + Validator UI
-    - Step 1 (Extract): POST /api/Agent (json={"phase":"extract", ...}) -> prefill form
-    - Step 2 (Review): user edits the form (NO item-level edits)
-    - Step 3 (Validate): POST /api/Agent?phase=validate with final JSON in body
+    Step 1 (Extract): POST /api/Agent with phase='extract' → get payload
+    Step 2 (Review): user edits top-level form (NOT line items)
+    Step 3 (Validate): POST /api/Agent?phase=validate → send final JSON
     """
-
-    st.markdown("### 📤 Upload and Review Expense Bill")
-    st.caption("Upload your hotel/receipt file, auto-extract details, review, and submit for validation.")
+    st.header("📤 Upload & Review Bill")
 
     uploaded_file = st.file_uploader(
         "Upload invoice/receipt (PNG/JPG/JPEG/WEBP/PDF)",
@@ -126,7 +151,7 @@ def extractor_node_ui(emp_id: str, output_dir: str, input_dir: Path):
     with c2:
         reset_clicked = st.button("Reset", use_container_width=True, key="reset_extractor_btn")
 
-    # ----- Reset flow -----
+    # Reset flow
     if reset_clicked:
         st.session_state.ui_step = "idle"
         st.session_state.extraction_resp = None
@@ -136,16 +161,15 @@ def extractor_node_ui(emp_id: str, output_dir: str, input_dir: Path):
         st.success("Extractor state cleared.")
         return
 
-    # ----- On Extract -----
+    # Run extraction
     if run_clicked:
         if not emp_id:
-            st.warning("Please enter Employee ID (login first).")
+            st.warning("Please log in again: no emp_id in session.")
             return
         if not uploaded_file:
-            st.warning("Please upload an image/PDF file.")
+            st.warning("Please upload an image/PDF file first.")
             return
 
-        # Save file locally so FastAPI can read it
         safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", uploaded_file.name)
         file_path = input_dir / safe_name
         with open(file_path, "wb") as f:
@@ -172,19 +196,19 @@ def extractor_node_ui(emp_id: str, output_dir: str, input_dir: Path):
             st.session_state.extracted_payload = payload
             st.session_state.ui_step = "form"
 
-            st.success("Extraction complete (phase=extract) ✅")
+            st.success("Extraction complete ✅")
             st.write("**Saved at:**", str(file_path))
 
         except requests.exceptions.RequestException as e:
             st.error(f"Connection error: {e}")
             return
 
-    # If not yet extracted, stop here
+    # If we're not in 'form' mode yet, stop here
     if st.session_state.ui_step != "form":
         st.info("Upload a file and click **Click to Review** to continue.")
         return
 
-    # ----- Render form from payload -----
+    # Render editable form
     payload = st.session_state.extracted_payload or {}
 
     if not isinstance(payload, dict) or not payload:
@@ -197,12 +221,12 @@ def extractor_node_ui(emp_id: str, output_dir: str, input_dir: Path):
     with st.expander("Raw extraction payload"):
         st.json(payload)
 
-    # Optional: gate by category
+    # Gate by category if you only want 'hotel' invoices editable
     if payload.get("category") != "hotel":
         st.info(f"Form available only for category 'hotel'. Found: {payload.get('category')!r}")
         return
 
-    # ---------- FORM (NO item-level fields) ----------
+    # Editable top-level form (no item-level edits)
     with st.form(key="invoice_form", clear_on_submit=False):
         st.write("**Top-level fields**")
         c = st.columns(5)
@@ -211,7 +235,10 @@ def extractor_node_ui(emp_id: str, output_dir: str, input_dir: Path):
         with c[1]:
             employee_id = st.text_input("employee_id", value=payload.get("employee_id", emp_id or ""))
         with c[2]:
-            expense_date = st.date_input("expense_date", value=parse_iso_date(payload.get("expense_date", to_iso(date.today()))))
+            expense_date = st.date_input(
+                "expense_date",
+                value=parse_iso_date(payload.get("expense_date", to_iso(date.today())))
+            )
         with c[3]:
             vendor = st.text_input("vendor", value=payload.get("vendor", ""))
         with c[4]:
@@ -221,7 +248,10 @@ def extractor_node_ui(emp_id: str, output_dir: str, input_dir: Path):
         with c[0]:
             invoice_number = st.text_input("invoice_number", value=payload.get("invoice_number", ""))
         with c[1]:
-            inv_date = st.date_input("date", value=parse_iso_date(payload.get("date", to_iso(date.today()))))
+            inv_date = st.date_input(
+                "date",
+                value=parse_iso_date(payload.get("date", to_iso(date.today())))
+            )
         with c[2]:
             total_amount = st.number_input(
                 "total_amount",
@@ -246,7 +276,6 @@ def extractor_node_ui(emp_id: str, output_dir: str, input_dir: Path):
             buyer_name = st.text_input("buyer.name", value=deep_get(payload, "buyer.name", ""))
         with c[1]:
             buyer_email = st.text_input("buyer.email", value=deep_get(payload, "buyer.email", ""))
-        # c[2], c[3], c[4] intentionally blank
 
         st.write("**Seller**")
         c = st.columns(5)
@@ -254,15 +283,20 @@ def extractor_node_ui(emp_id: str, output_dir: str, input_dir: Path):
             seller_hotel = st.text_input("seller.hotel_name", value=deep_get(payload, "seller.hotel_name", ""))
         with c[1]:
             seller_location = st.text_input("seller.location", value=deep_get(payload, "seller.location", "") or "")
-        # remaining cols blank
 
         st.markdown("---")
         st.write("**Booking Details**")
         c = st.columns(5)
         with c[0]:
-            booking_number = st.text_input("booking_details.booking_number", value=deep_get(payload, "booking_details.booking_number", ""))
+            booking_number = st.text_input(
+                "booking_details.booking_number",
+                value=deep_get(payload, "booking_details.booking_number", "")
+            )
         with c[1]:
-            payment_reference = st.text_input("booking_details.payment_reference", value=deep_get(payload, "booking_details.payment_reference", ""))
+            payment_reference = st.text_input(
+                "booking_details.payment_reference",
+                value=deep_get(payload, "booking_details.payment_reference", "")
+            )
         with c[2]:
             check_in = st.date_input(
                 "booking_details.check_in",
@@ -273,13 +307,11 @@ def extractor_node_ui(emp_id: str, output_dir: str, input_dir: Path):
                 "booking_details.check_out",
                 value=parse_iso_date(deep_get(payload, "booking_details.check_out", to_iso(date.today())))
             )
-        # c[4] empty
 
         submitted = st.form_submit_button("Submit")
 
-    # ----- After form submit: keep items unchanged & persist to DB -----
     if submitted:
-        items = payload.get("items", [])
+        items = payload.get("items", [])  # keep read-only
 
         payload_out = {
             "invoice_id": invoice_id,
@@ -303,7 +335,7 @@ def extractor_node_ui(emp_id: str, output_dir: str, input_dir: Path):
                 "booking_number": booking_number,
                 "payment_reference": payment_reference,
                 "check_in": to_iso(check_in),
-                "check_out": to_iso(check_out)
+                "check_out": to_iso(check_out),
             },
             "total": round(float(total), 2),
             "category": category or "hotel"
@@ -312,20 +344,20 @@ def extractor_node_ui(emp_id: str, output_dir: str, input_dir: Path):
         st.session_state.last_payload = payload_out
         st.session_state.ui_step = "form"
 
-        # Save to DB
+        # Write to DB
         try:
             claim_id = save_expense_claim(payload_out)
             st.success(f"✅ Expense Claim saved successfully! Claim ID: **{claim_id}**")
         except Exception as e:
             st.error(f"❌ Database insert failed: {e}")
 
-    # ----- Read-only items view -----
+    # Read-only extracted items
     if isinstance(payload.get("items", None), list):
         with st.expander("View extracted items (read-only)"):
             st.json(payload["items"])
 
-    # ----- Validate button -----
-    if st.session_state.last_payload:
+    # Validate final JSON
+    if st.session_state.get("last_payload"):
         st.markdown("---")
         st.write("**⚙️ Validate the Final JSON (after your review)**")
         if st.button("✅ Submit & Validate", key="run_agent_validate", use_container_width=True):
@@ -344,126 +376,119 @@ def extractor_node_ui(emp_id: str, output_dir: str, input_dir: Path):
             except requests.exceptions.RequestException as e:
                 st.error(f"Connection error: {e}")
 
+# -------------------------------------------------
+# DASHBOARD WRAPPER
+# -------------------------------------------------
+def dashboard(emp_id: str):
+    # extractor_node_ui itself renders header + rest
+    extractor_node_ui(emp_id, OUTPUT_DIR, input_dir)
 
-# ----------------------------
-# Session state init
-# ----------------------------
-if 'authenticated' not in st.session_state:
-    st.session_state.authenticated = False
-if 'username' not in st.session_state:
-    st.session_state.username = None
-if 'user_details' not in st.session_state:
-    st.session_state.user_details = {}
-if 'emp_id' not in st.session_state:
-    st.session_state.emp_id = None
-if 'grade' not in st.session_state:
-    st.session_state.grade = None
-if 'manager_id' not in st.session_state:
-    st.session_state.manager_id = None
-if 'first_name' not in st.session_state:
-    st.session_state.first_name = None
+# -------------------------------------------------
+# INIT LOCAL (PER-PAGE) STATE FOR EXTRACTOR UI
+# -------------------------------------------------
+for key, default in {
+    "ui_step": "idle",               # "idle" | "form"
+    "extraction_resp": None,
+    "extracted_payload": None,
+    "uploaded_image_path": None,
+    "last_payload": None,
+}.items():
+    if key not in st.session_state:
+        st.session_state[key] = default
 
-# extractor flow session vars
-if 'ui_step' not in st.session_state:
-    st.session_state.ui_step = "idle"   # "idle" | "form"
-if 'extraction_resp' not in st.session_state:
-    st.session_state.extraction_resp = None
-if 'extracted_payload' not in st.session_state:
-    st.session_state.extracted_payload = None
-if 'uploaded_image_path' not in st.session_state:
-    st.session_state.uploaded_image_path = None
-if 'last_payload' not in st.session_state:
-    st.session_state.last_payload = None
-if 'login_error' not in st.session_state:
-    st.session_state.login_error = None
+# -------------------------------------------------
+# PAGE RENDER
+# -------------------------------------------------
 
+# 1. Make sure user is allowed here
+ensure_employee_allowed()
 
-# ----------------------------
-# Auth helpers
-# ----------------------------
-def check_credentials(username: str, password: str) -> bool:
-    rec = _agent.load_employee_by_email(username)
-    if not rec:
-        return False
-    # Replace with real password verification
-    return password == "password"
+# 2. Sidebar info / cross-nav
+st.sidebar.write(f"Logged in as {st.session_state.email}")
+st.sidebar.button("Logout", on_click=do_logout_and_return)
 
-def get_user_details(username: str):
-    return _agent.load_employee_by_email(username)
+# If manager, show button to jump
+if st.session_state.access_label == "M":
+    st.sidebar.button("Manager View", on_click=go_manager)
 
-def login_callback(username, password):
-    if check_credentials(username, password):
-        st.session_state.authenticated = True
-        st.session_state.username = username
-        st.session_state.user_details = {
-            "name": (username.split("@")[0]).capitalize() if "@" in username else username.capitalize(),
-            "role": "Admin" if username == "admin" else "User",
-            "last_login": time.strftime("%Y-%m-%d %H:%M:%S"),
-        }
-        st.session_state.login_error = None
-        st.rerun()
-    else:
-        st.session_state.authenticated = False
-        st.session_state.login_error = "Invalid Username or Password. Please try again."
+# If finance-capable user somehow lands here, let them jump
+if (
+    st.session_state.access_label == "F"
+    or (st.session_state.get("email", "").lower() == "finance@company.com")
+):
+    st.sidebar.button("Finance View", on_click=go_finance)
 
-def logout_callback():
-    st.session_state.authenticated = False
-    st.session_state.username = None
-    st.session_state.user_details = {}
-    st.rerun()
-
-
-# ----------------------------
-# MAIN ROUTER (Now uses tabs)
-# ----------------------------
-if st.session_state.authenticated:
-    # Sidebar: just profile + logout
-    with st.sidebar:
-        st.write(f"**Signed in as:** {st.session_state.username} 🧑‍💻")
-        st.write("Role:", st.session_state.user_details.get("role", "User"))
-        st.write("Last login:", st.session_state.user_details.get("last_login", "—"))
-        st.button("Logout", on_click=logout_callback, key="logout_sidebar_btn")
-
-    # Welcome header
-    user_name = st.session_state.user_details.get('name', 'User')
-    st.subheader(f"Welcome back, {user_name}! 👋")
-
-    # sync more details from DB
-    details = get_user_details(st.session_state.username)
+# 3. Load employee metadata (emp_id etc.) if not present
+if not st.session_state.get("emp_id"):
+    details = _agent.load_employee_by_email(st.session_state.email)
     if details:
-        st.session_state.emp_id = details.get('employee_id')
-        st.session_state.grade = details.get('grade')
-        st.session_state.manager_id = details.get('manager_id')
-        st.session_state.first_name = details.get('first_name')
+        st.session_state.emp_id = details.get("employee_id")
+        st.session_state.grade = details.get("grade")
+        st.session_state.manager_id = details.get("manager_id")
+        st.session_state.first_name = details.get("first_name")
 
-    # Top-level tabs AFTER LOGIN
-    tab_upload, tab_status = st.tabs(["📤 Upload Files", "📊 Status"])
+# 4. Greeting
+emp_name_display = st.session_state.get("first_name") or st.session_state.email
+st.subheader(f"Welcome, {emp_name_display}! 👋")
 
-    # Tab 1: Upload Files (full extractor workflow)
-    with tab_upload:
-        extractor_node_ui(st.session_state.emp_id, OUTPUT_DIR, input_dir)
+# 5. MAIN CONTENT TABS instead of sidebar radio
+tab_upload, tab_claims, tab_approve = st.tabs(
+    ["📤 Upload Bill", "💼 Claims Dashboard", "📜 Bill Approve"]
+)
 
-    # Tab 2: Status (claims dashboard)
-    with tab_status:
-        st.markdown("### 📊 Claim Submission Status")
-        show_claims_dashboard()
+with tab_upload:
+    dashboard(st.session_state.get("emp_id"))
 
-else:
-    # Not logged in / session expired
-    st.error("🔒 Session Expired or Not Logged In. Please sign in to continue.")
+with tab_claims:
+    show_claims_dashboard()
 
-    # Center login form
-    col_empty, col_form, col_empty2 = st.columns([1, 2, 1])
-    with col_form:
-        with st.form(key="login_form"):
-            st.subheader("User Login")
-            username = st.text_input("Email:", key="login_username")
-            password = st.text_input("Password:", type="password", key="login_password")
-            submitted_login = st.form_submit_button("Sign In", use_container_width=True)
 
-            if submitted_login:
-                login_callback(username, password)
-                if st.session_state.authenticated:
-                    st.rerun()
-                elif st.session_state.login_error:
-                    st.error(st.session_state.login_error)
+def manager_approve():
+        # Only managers should see this tab meaningfully
+    if st.session_state.get("access_label") != "M":
+        st.warning("You do not have manager approval rights.")
+    else:
+        mgr_id = st.session_state.get("emp_id")
+
+        if not mgr_id:
+            st.error("Cannot resolve your manager ID (emp_id missing in session). Please re-login.")
+        else:
+            try:
+                pending_df = db_utils.load_manager_pending_claims(mgr_id, limit=100)
+
+                st.write(pending_df)
+
+                if pending_df is None or pending_df.empty:
+                    st.info("🎉 No pending claims from your direct reports.")
+                else:
+                    st.caption(
+                        "These are expense claims from your direct reports currently in 'Pending Review'."
+                    )
+
+                    st.dataframe(
+                        pending_df,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "claim_id": "Claim ID",
+                            "user_name": "Employee Name",
+                            "claim_type": "Claim Type",
+                            "amount": st.column_config.NumberColumn(format="₹ %.2f"),
+                            "currency": "Currency",
+                            "status": "Status",
+                            "vendor_name": "Vendor",
+                            "claim_date": st.column_config.DatetimeColumn(format="YYYY-MM-DD"),
+                        },
+                    )
+
+                    with st.expander("Raw data (debug)"):
+                        st.write(pending_df)
+
+            except Exception as e:
+                st.error(f"Failed to load pending approvals: {e}")
+
+
+with tab_approve:
+    manager_approve()
+    
+

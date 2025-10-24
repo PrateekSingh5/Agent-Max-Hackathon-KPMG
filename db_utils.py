@@ -87,3 +87,49 @@ def save_expense_claim(payload: dict) -> str:
         conn.execute(insert_sql, data)
 
     return claim_id
+
+
+def load_manager_pending_claims(manager_id: str, limit: int = 100):
+    """
+    For managers:
+    Show all PENDING REVIEW claims for direct reports.
+    Direct report = employees.manager_id == this manager's employee_id.
+    """
+    sql = """
+        SELECT
+            ec.claim_id,
+            ec.employee_id,
+            COALESCE(
+                NULLIF(TRIM(CONCAT(e.first_name, ' ', e.last_name)), ''),
+                ec.employee_id
+            ) AS user_name,
+            ec.expense_category AS claim_type,
+            ec.amount,
+            ec.currency,
+            ec.status,
+            ec.vendor_id AS vendor_name,
+            ec.claim_date
+        FROM expense_claims ec
+        INNER JOIN employees e
+            ON e.employee_id = ec.employee_id
+        WHERE
+            e.manager_id = %(mgr_id)s
+            AND ec.status = 'Pending Review'
+        ORDER BY ec.claim_date DESC, ec.claim_id DESC
+        LIMIT %(limit_val)s
+    """
+
+    with engine.connect() as conn:
+        df = pd.read_sql_query(
+            sql,
+            conn,
+            params={
+                "mgr_id": manager_id,
+                "limit_val": int(limit),
+            },
+        )
+
+    return df
+
+
+    
