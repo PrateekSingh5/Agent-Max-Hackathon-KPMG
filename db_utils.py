@@ -373,7 +373,7 @@ def manager_update_claim_decision(claim_id: str, decision: str, comment: str, ap
             WHERE claim_id = :claim_id
         """), {"status": status_val, "claim_id": claim_id})
 
-        
+
 
 def load_manager_team_pending_claims(
     manager_email,
@@ -529,3 +529,27 @@ def load_finance_pending_claims() -> pd.DataFrame:
             pass
 
     return df
+
+
+def finance_update_claim_decision(claim_id: str, decision: str, comment: str, approver_id: str) -> None:
+    """
+    decision: 'Approve' or 'Reject'
+    Updates expense_claims.status, and (optionally) finance_comment/finance_approver_id if your schema supports them.
+    """
+    status_val = "Approved" if decision == "Approve" else "Rejected"
+    with engine.begin() as conn:
+        # If your table has these columns, use this block:
+        # conn.execute(text("""
+        #     UPDATE expense_claims
+        #     SET status = :status,
+        #         finance_comment = :comment,
+        #         finance_approver_id = :fid
+        #     WHERE claim_id = :cid
+        # """), {"status": status_val, "comment": comment, "fid": approver_id, "cid": claim_id})
+
+        # Minimal update (status only)
+        conn.execute(text("""
+            UPDATE expense_claims
+            SET status = :status
+            WHERE claim_id = :cid
+        """), {"status": status_val, "cid": claim_id})

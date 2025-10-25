@@ -2,6 +2,17 @@ import streamlit as st
 import db_utils
 import agent as _agent  # for load_employee_by_email
 
+
+try:
+    import db_utils as db_utils   # if your file is named du_utils.py
+except ImportError:
+    import db_utils               # else fallback to db_utils.py
+
+# For executing SQL in the fallback path
+from sqlalchemy import text
+
+# (Optional) typing hints
+from typing import List, Dict
 # -------------------------------------------------
 # PAGE CONFIG (must be first Streamlit call)
 # -------------------------------------------------
@@ -48,6 +59,7 @@ def go_manager():
 def go_finance():
     st.switch_page("pages/finance_dashboard.py")
 
+
 def ensure_finance_allowed():
     """
     Must be logged in AND recognized as Finance (label/email/department).
@@ -85,6 +97,56 @@ def ensure_finance_allowed():
 # PAGE RENDER
 # -------------------------------------------------
 
+
+
+
+
+def _finance_update_claim_fallback(claim_id: str, decision: str, comment: str, approver_id: str):
+    """
+    Fallback direct-SQL updater if db_utils.finance_update_claim_decision(...) is not available.
+    Uses db_utils.engine. Stores only status by default; enable comment/approver columns if present.
+    """
+    sql_basic = text("""
+        UPDATE expense_claims
+        SET status = :status
+        WHERE claim_id = :claim_id
+    """)
+    # If your schema has finance_comment and finance_approver_id columns, switch to:
+    # sql_with_comment = text("""
+    #   UPDATE expense_claims
+    #   SET status = :status,
+    #       finance_comment = :comment,
+    #       finance_approver_id = :fid
+    #   WHERE claim_id = :claim_id
+    # """)
+
+    with db_utils.engine.begin() as conn:
+        conn.execute(sql_basic, {
+            "status": "Approved" if decision == "Approve" else "Rejected",
+            "claim_id": claim_id,
+            # "comment": comment,
+            # "fid": approver_id,
+        })
+
+def _apply_finance_decisions(rows_to_apply: list[dict], approver_id: str):
+    updater = getattr(db_utils, "finance_update_claim_decision", None)
+    successes, failures = [], []
+    for r in rows_to_apply:
+        claim_id = str(r.get("claim_id", "")).strip()
+        decision = str(r.get("Decision", "")).strip()
+        comment  = str(r.get("Finance Comment", "")).strip()
+        if not claim_id or decision not in {"Approve", "Reject"}:
+            continue
+        try:
+            if callable(updater):
+                updater(claim_id, decision, comment, approver_id)
+            else:
+                _finance_update_claim_fallback(claim_id, decision, comment, approver_id)
+            successes.append(claim_id)
+        except Exception as ex:
+            failures.append((claim_id, str(ex)))
+    return successes, failures
+
 # 1) Gate access
 ensure_finance_allowed()
 
@@ -117,25 +179,31 @@ Dashboard, tab_review = st.tabs(["Dashboard", "Pending Claims Review"])
 with Dashboard:
     st.write("Dashboard")
 
-def finance_approve():
-    """
-    Show ALL claims routed to Finance (status = 'Finance Pending').
-    """
-    # --- Use unified check here too ---
+def finance_approve():  
     if not _is_finance_user():
-        # (Fixes your incorrect message string: this is FINANCE rights, not MANAGER)
         st.warning("You do not have finance approval rights.")
         return
 
+    # Resolve finance approver id (employee id in session)
+    fin_emp_id = st.session_state.get("emp_id", "") or ""
+
     try:
         df = db_utils.load_finance_pending_claims()
-
         if df is None or df.empty:
             st.info("No claims are pending with Finance at the moment.")
             return
 
-        st.dataframe(
-            df,
+        work = df.copy()
+
+        # Add editable columns if not present
+        if "Decision" not in work.columns:
+            work["Decision"] = ""
+        if "Finance Comment" not in work.columns:
+            work["Finance Comment"] = ""
+
+        st.markdown("### Pending Claims (Finance Review)")
+        edited = st.data_editor(
+            work,
             use_container_width=True,
             hide_index=True,
             column_config={
@@ -147,9 +215,73 @@ def finance_approve():
                 "currency": "Currency",
                 "status": "Status",
                 "vendor_name": "Vendor",
-                "claim_date": st.column_config.DateColumn(format="YYYY-MM-DD"),
+                "claim_date": st.column_config.DatetimeColumn(format="YYYY-MM-DD"),
+                # Editable:
+                "Decision": st.column_config.SelectboxColumn(
+                    "Decision",
+                    options=["", "Approve", "Reject"],
+                    required=False,
+                    help="Choose Approve or Reject for each claim you want to act on."
+                ),
+                "Finance Comment": st.column_config.TextColumn(
+                    "Finance Comment",
+                    help="Optional note stored with your decision."
+                ),
             },
+            disabled=[
+                "claim_id", "employee_id", "user_name", "claim_type",
+                "amount", "currency", "status", "vendor_name", "claim_date"
+            ],
+            key="finance_editor",
         )
+
+        c1, c2 = st.columns([1, 3])
+        with c1:
+            do_submit = st.button("Submit decisions", use_container_width=True, key="finance_submit_btn")
+        with c2:
+            st.caption("Tip: leave Decision blank to skip a row.")
+
+        if do_submit:
+            rows = edited.fillna("").to_dict(orient="records")
+            to_apply = [r for r in rows if r.get("Decision") in {"Approve", "Reject"}]
+
+            if not to_apply:
+                st.info("No decisions to apply.")
+                return
+
+            ok, bad = _apply_finance_decisions(to_apply, approver_id=fin_emp_id)
+
+            if ok:
+                st.success(f"Updated {len(ok)} claim(s): {', '.join(ok)}")
+            if bad:
+                st.error("Some updates failed:")
+                for cid, msg in bad:
+                    st.write(f"- {cid}: {msg}")
+
+            # Refresh UI by removing processed rows locally
+            if ok:
+                remaining = edited[~edited["claim_id"].isin(ok)].drop(columns=["Decision", "Finance Comment"], errors="ignore")
+                if remaining.empty:
+                    st.info("All finance pending items are processed. 🎉")
+                else:
+                    st.markdown("#### Remaining Pending Items")
+                    st.dataframe(
+                        remaining,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "claim_id": "Claim ID",
+                            "employee_id": "Employee ID",
+                            "user_name": "Employee Name",
+                            "claim_type": "Claim Type",
+                            "amount": st.column_config.NumberColumn(format="₹ %.2f"),
+                            "currency": "Currency",
+                            "status": "Status",
+                            "vendor_name": "Vendor",
+                            "claim_date": st.column_config.DatetimeColumn(format="YYYY-MM-DD"),
+                        },
+                    )
+
     except Exception as e:
         st.error(f"Failed to load finance pending claims: {e}")
 
