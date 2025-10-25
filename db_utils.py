@@ -223,7 +223,7 @@
 
 #     return df
 
-
+# @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 
 # db_utils.py
 import pandas as pd
@@ -304,29 +304,24 @@ def generate_claim_id():
         next_num = 1
     return f"CLM-{date_prefix}-{next_num:04d}"
 
-
-def save_expense_claim(payload_out: dict) -> str:
+def save_expense_claim(payload_out: dict, status) -> str:
     """
     Insert one row into expense_claims using the normalized payload
     coming from Streamlit (hotel/travel/food/local_conveyance/other).
+    'tag' determines the initial status and auto_approved if applicable.
     Returns the generated claim_id.
     """
     now = datetime.now()
     claim_id = f"CLM-{now.strftime('%Y%m%d-%H%M%S')}"
 
+    # ---- base fields from payload ----
     employee_id = payload_out.get("employee_id")
     expense_category = payload_out.get("category", "other")
     amount = float(payload_out.get("total_amount", 0.0) or 0.0)
     currency = payload_out.get("currency", "INR")
-
-    raw_vendor = payload_out.get("vendor") or ""
+    raw_vendor = (payload_out.get("vendor") or "").strip()
     vendor_name = raw_vendor or None
-
-    receipt_id = (
-        payload_out.get("invoice_id")
-        or payload_out.get("invoice_number")
-        or None
-    )
+    receipt_id = payload_out.get("invoice_id") or payload_out.get("invoice_number") or None
 
     claim_date = payload_out.get("expense_date")
     if isinstance(claim_date, str) and claim_date:
@@ -334,10 +329,28 @@ def save_expense_claim(payload_out: dict) -> str:
     else:
         db_claim_date = now.strftime("%Y-%m-%d")
 
-    linked_booking_id = None
-    payment_mode = None
-    status_val = "Pending Review"
+    # ---- normalize tag -> status & auto_approved & payment_mode ----
+    status_val = status
+    auto_approved_flag = False
+    payment_mode = payload_out.get("payment_mode") or None
 
+    if isinstance(status, dict):
+        status_val = (
+            status.get("status")
+            or status.get("route_status")
+            or status.get("final_status")
+            or "Pending Review"
+        )
+        auto_approved_flag = bool(status.get("auto_approved", False))
+        if status.get("payment_mode") and not payment_mode:
+            payment_mode = status.get("payment_mode")
+    elif isinstance(status, str):
+        status_val = status  # e.g. "Auto Approved", "Pending Review", etc.
+
+    # ---- optional fields (kept as None) ----
+    linked_booking_id = None
+
+    # ---- build Details / Others_1 safely (truncate if your columns are VARCHAR) ----
     details_obj = {
         "invoice_id": payload_out.get("invoice_id"),
         "employee_id": employee_id,
@@ -350,15 +363,27 @@ def save_expense_claim(payload_out: dict) -> str:
         "booking_details": payload_out.get("booking_details"),
         "food_details": payload_out.get("food_details"),
         "other_details": payload_out.get("other_details"),
+        "payment_mode": payment_mode,              # copy for audit
+        "status_from_tag": status_val,             # normalized status
+        "auto_approved_from_tag": auto_approved_flag,
+        "raw_tag": "",                            # keep full tag for traceability
     }
-    Details = json.dumps(details_obj, indent=2, default=str)
-    Others_1 = json.dumps(payload_out, default=str)
+
+    # If your table columns are TEXT you can skip truncation. If they are VARCHAR(n),
+    # adjust these limits to your column sizes to avoid Postgres string truncation errors.
+    def _to_json_truncated(obj, max_len: int):
+        s = json.dumps(obj, ensure_ascii=False, default=str)
+        return s if len(s) <= max_len else (s[: max_len - 3] + "...")
+
+    # Conservative caps; tweak if you know your exact VARCHAR sizes
+    DETAILS_MAX = 4000
+    OTHERS1_MAX = 4000
+
+    Details = _to_json_truncated(details_obj, DETAILS_MAX)
+    Others_1 = _to_json_truncated(payload_out, OTHERS1_MAX)
     Others_2 = None
 
-    auto_approved = False
-    is_duplicate = False
-    fraud_flag = False
-
+    # ---- final insert (never send None for boolean) ----
     insert_sql = text("""
         INSERT INTO expense_claims (
             claim_id,
@@ -419,18 +444,95 @@ def save_expense_claim(payload_out: dict) -> str:
                     "Details": Details,
                     "Others_1": Others_1,
                     "Others_2": Others_2,
-                    "auto_approved": auto_approved,
-                    "is_duplicate": is_duplicate,
-                    "fraud_flag": fraud_flag,
+                    "auto_approved": bool(auto_approved_flag),  # ← always boolean
+                    "is_duplicate": False,
+                    "fraud_flag": False,
                 },
             )
     except Exception as ex:
         print(f"[db_utils] save_expense_claim error: {ex}")
-        # Re-raise or return a sentinel; returning ID keeps UI simple
-        # but your caller might want to handle failure separately.
-        # raise
+        raise
     return claim_id
 
+
+def log_validation_result(claim_id: str, employee_id: str, validation_obj: dict):
+    """
+    Store validator decision snapshot in expense_validation_logs.
+    validation_obj is the JSON returned by the policy validation agent.
+    Expected keys we care about:
+      - "status" / "route_status" / "final_status"    -> mapped to status_val
+      - "payment_mode"
+      - "auto_approved" (bool)
+    We'll keep the full blob in raw_validation_json.
+    """
+
+    # --- defensive fetches ---
+    status_val = (
+        validation_obj.get("status")
+        or validation_obj.get("route_status")
+        or validation_obj.get("final_status")
+        or "Pending Review"
+    )
+
+    payment_mode = validation_obj.get("payment_mode")
+    auto_approved = bool(validation_obj.get("auto_approved", False))
+
+    insert_sql = text("""
+        INSERT INTO expense_validation_logs (
+            claim_id,
+            employee_id,
+            status_val,
+            payment_mode,
+            auto_approved,
+            raw_validation_json
+        )
+        VALUES (
+            :claim_id,
+            :employee_id,
+            :status_val,
+            :payment_mode,
+            :auto_approved,
+            :raw_validation_json
+        )
+    """)
+
+    with engine.begin() as conn:
+        conn.execute(
+            insert_sql,
+            {
+                "claim_id": claim_id,
+                "employee_id": employee_id,
+                "status_val": status_val,
+                "payment_mode": payment_mode,
+                "auto_approved": auto_approved,
+                "raw_validation_json": json.dumps(validation_obj, default=str),
+            },
+        )
+
+    # return what we actually wrote, could help UI
+    return {
+        "claim_id": claim_id,
+        "status_val": status_val,
+        "payment_mode": payment_mode,
+        "auto_approved": auto_approved,
+    }
+
+def update_claim_status(claim_id: str, status_val: str, auto_approved: bool):
+    upd_sql = text("""
+        UPDATE expense_claims
+        SET status = :status_val,
+            auto_approved = :auto_approved
+        WHERE claim_id = :claim_id
+    """)
+    with engine.begin() as conn:
+        conn.execute(
+            upd_sql,
+            {
+                "claim_id": claim_id,
+                "status_val": status_val,
+                "auto_approved": auto_approved,
+            },
+        )
 
 # ----------------------------
 # NEW / UPDATED QUERIES
@@ -542,3 +644,7 @@ def load_finance_pending_claims(limit: int = 200) -> pd.DataFrame:
             "amount", "currency", "status", "vendor_name", "claim_date"
         ])
     return df
+
+
+# @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+

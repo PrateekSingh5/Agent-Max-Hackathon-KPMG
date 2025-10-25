@@ -4,16 +4,15 @@ import json
 import time
 from pathlib import Path
 from datetime import date, datetime
-
 import requests
 import pandas as pd
 from sqlalchemy import create_engine, text
 import streamlit as st
+import agent as _agent  # must expose run_validation_agent(...)
 
-import agent as _agent            # your module
-from db_utils import save_expense_claim  # writes to DB
-from claims_dashboard import load_recent_claims  # import your loader
+from db_utils import save_expense_claim, log_validation_result
 
+from claims_dashboard import load_recent_claims
 # -------------------------------------------------
 # PAGE CONFIG (must be first Streamlit call)
 # -------------------------------------------------
@@ -630,44 +629,121 @@ def extractor_node_ui(emp_id: str, output_dir: str, input_dir: Path):
     # --- Dynamic category form ---
     payload_out = render_dynamic_form(payload, emp_id)
 
+
     if payload_out is not None:
         # user clicked Submit inside the category form
-        st.session_state.last_payload = payload_out
         st.session_state.ui_step = "form"
 
-        # Write to DB
+        # 1) Save claim
+
+
+        # 2) Run validation (no extra button)
+        #    Option A: call your in-process agent function (preferred)
+        # try:
+        #     validation_json = _agent.run_validation_agent(
+        #         employee_id=payload_out.get("employee_id") or emp_id,
+        #         claim_id=claim_id,
+        #         payload_out=payload_out,
+        #     )
+        # except Exception as agent_ex:
+        #     validation_json = {
+        #         "status": "ValidationError",
+        #         "auto_approved": False,
+        #         "payment_mode": payload_out.get("payment_mode"),
+        #         "error_msg": str(agent_ex),
+        #     }
+
+        # --- If you prefer to keep the FastAPI call instead of _agent.run_validation_agent, use this:
         try:
-            claim_id = save_expense_claim(payload_out)
+            r = requests.post(
+                AGENT_ENDPOINT,
+                params={"phase": "validate"},
+                json=payload_out,
+                timeout=120
+            )
+            r.raise_for_status()
+            validation_json = r.json() or {}
+            st.write("Validation Payload")
+            st.json(validation_json)
+        except requests.exceptions.RequestException as e:
+            validation_json = {
+                "status": "ValidationError",
+                "auto_approved": False,
+                "payment_mode": payload_out.get("payment_mode"),
+                "error_msg": str(e),
+            }
+        st.write("Payload")
+        st.json(payload_out)
+        try:
+            status = validation_json['tag']
+            st.write(status)
+            claim_id = save_expense_claim(payload_out,status)
             st.success(f"✅ Expense Claim saved successfully! Claim ID: **{claim_id}**")
         except Exception as e:
             st.error(f"❌ Database insert failed: {e}")
+            st.stop()
 
-    # Read-only extracted items
-    if isinstance(payload.get("items", None), list):
-        with st.expander("View extracted line items (read-only)"):
-            st.json(payload["items"])
+        # 3) Map and log (status_val, payment_mode, auto_approved + raw)
+        try:
+            summary = log_validation_result(
+                claim_id=claim_id,
+                employee_id=payload_out.get("employee_id") or emp_id,
+                validation_obj=tag,
+            )
+        except Exception as log_ex:
+            summary = {
+                "claim_id": claim_id,
+                "status_val": "LogError",
+                "auto_approved": False,
+                "log_error": str(log_ex),
+            }
 
-    # Validate final JSON (only if we have last_payload)
-    if st.session_state.get("last_payload"):
-        st.markdown("---")
-        st.write("**⚙️ Validate the Final JSON (after your review)**")
-        if st.button("✅ Submit & Validate", key="run_agent_validate", use_container_width=True):
-            try:
-                # For validate phase we assume FastAPI expects phase in query OR body.
-                # We'll send as query param 'phase=validate' + full JSON body.
-                r = requests.post(
-                    AGENT_ENDPOINT,
-                    params={"phase": "validate"},
-                    json=st.session_state.last_payload,
-                    timeout=120
-                )
-                st.write(f"**Status:** {r.status_code}")
-                try:
-                    st.json(r.json())
-                except ValueError:
-                    st.code(r.text)
-            except requests.exceptions.RequestException as e:
-                st.error(f"Connection error: {e}")
+        # 4) UI feedback
+        st.info("Validation summary")
+        st.json(summary)
+
+        with st.expander("Full validation response"):
+            st.json(validation_json)
+
+
+    # if payload_out is not None:
+    #     # user clicked Submit inside the category form
+    #     st.session_state.last_payload = payload_out
+    #     st.session_state.ui_step = "form"
+
+    #     # Write to DB
+    #     try:
+    #         claim_id = save_expense_claim(payload_out)
+    #         st.success(f"✅ Expense Claim saved successfully! Claim ID: **{claim_id}**")
+    #     except Exception as e:
+    #         st.error(f"❌ Database insert failed: {e}")
+
+    # # Read-only extracted items
+    # if isinstance(payload.get("items", None), list):
+    #     with st.expander("View extracted line items (read-only)"):
+    #         st.json(payload["items"])
+
+    # # Validate final JSON (only if we have last_payload)
+    # if st.session_state.get("last_payload"):
+    #     st.markdown("---")
+    #     st.write("**⚙️ Validate the Final JSON (after your review)**")
+    #     if st.button("✅ Submit & Validate", key="run_agent_validate", use_container_width=True):
+    #         try:
+    #             # For validate phase we assume FastAPI expects phase in query OR body.
+    #             # We'll send as query param 'phase=validate' + full JSON body.
+    #             r = requests.post(
+    #                 AGENT_ENDPOINT,
+    #                 params={"phase": "validate"},
+    #                 json=st.session_state.last_payload,
+    #                 timeout=120
+    #             )
+    #             st.write(f"**Status:** {r.status_code}")
+    #             try:
+    #                 st.json(r.json())
+    #             except ValueError:
+    #                 st.code(r.text)
+    #         except requests.exceptions.RequestException as e:
+    #             st.error(f"Connection error: {e}")
 
 # -------------------------------------------------
 # DASHBOARD WRAPPER
@@ -731,3 +807,7 @@ with tab_upload:
 
 with tab_claims:
     show_claims_dashboard()
+
+
+# @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+

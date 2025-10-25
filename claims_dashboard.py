@@ -29,30 +29,3 @@ def load_recent_claims(employee_id: str, limit: int = 50):
     with _engine.connect() as conn:
         return pd.read_sql_query(sql, conn, params={"emp_id": employee_id, "limit": int(limit)})
 
-
-def show_claims_dashboard():
-    st.title("💼 Expense Claims Dashboard")
-    st.caption("Showing top 50 most recent claims")
-
-    try:
-        df = load_recent_claims(50)
-        if df.empty:
-            st.info("No claims found yet.")
-        else:
-            st.dataframe(
-                df,
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "claim_id": "Claim ID",
-                    "employee_id": "Employee ID",
-                    "claim_type": "Claim Type",
-                    "amount": st.column_config.NumberColumn(format="₹ %.2f"),
-                    "currency": "Currency",
-                    "status": "Status",
-                    "vendor": "Vendor",
-                    "claim_date": st.column_config.DatetimeColumn(format="YYYY-MM-DD")
-                }
-            )
-    except Exception as e:
-        st.error(f"Failed to load claims: {e}")
