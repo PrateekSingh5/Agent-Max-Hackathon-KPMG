@@ -8,6 +8,9 @@ import json
 import sqlalchemy as _sql
 from sqlalchemy import text
 
+from typing import Optional, List
+import pandas as pd
+
 # --- Database connection (same as your agent_max setup) ---
 DATABASE_URL = _database.DATABASE_URL
 engine = _sql.create_engine(DATABASE_URL, future=True)
@@ -348,12 +351,66 @@ def load_recent_claims(emp_id: str, limit: int = 50) -> pd.DataFrame:
     return df
 
 
-def load_manager_pending_claims(manager_id: str, limit: int = 100) -> pd.DataFrame:
+
+def load_manager_team_pending_claims(
+    manager_email,
+    manager_id,
+) -> pd.DataFrame:
     """
-    Managers: show all 'Pending Review' claims for direct reports.
-    Fixes previous error by using vendor_name/JSON instead of vendor_id.
+    1) Resolve manager's employee_id (from email if needed)
+    2) Get all employees where employees.manager_id = <manager_emp_id>
+    3) Fetch all expense_claims with employee_id IN (team_ids) and status in ('Pending Review','Pending')
+       NOTE: handles TEXT details column by casting to jsonb when extracting vendor.
+    Returns a dataframe with claim rows (no LIMIT).
     """
-    sql = """
+
+    # 1) Resolve manager_id if not provided
+    if not manager_id:
+        if not manager_email:
+            return _empty_df([
+                "claim_id","employee_id","user_name","claim_type",
+                "amount","currency","status","vendor_name","claim_date"
+            ])
+        sql_mgr = """
+            SELECT employee_id
+            FROM employees
+            WHERE LOWER(email) = LOWER(%(email)s)
+            LIMIT 1
+        """
+        mgr_df, err = _safe_read_sql(sql_mgr, {"email": manager_email})
+        if err or mgr_df.empty:
+            return _empty_df([
+                "claim_id","employee_id","user_name","claim_type",
+                "amount","currency","status","vendor_name","claim_date"
+            ])
+        manager_id = mgr_df.iloc[0]["employee_id"]
+
+    # 2) Direct reports under this manager
+    sql_team = """
+        SELECT employee_id
+        FROM employees
+        WHERE manager_id = %(mgr_id)s
+    """
+    team_df, err = _safe_read_sql(sql_team, {"mgr_id": manager_id})
+    if err or team_df.empty:
+        return _empty_df([
+            "claim_id","employee_id","user_name","claim_type",
+            "amount","currency","status","vendor_name","claim_date"
+        ])
+
+    emp_ids: List[str] = (
+        team_df["employee_id"].dropna().astype(str).unique().tolist()
+    )
+    if not emp_ids:
+        return _empty_df([
+            "claim_id","employee_id","user_name","claim_type",
+            "amount","currency","status","vendor_name","claim_date"
+        ])
+
+    # 3) Pending claims for those employee_ids (NO LIMIT)
+    # - Cast Python list to text[] with ::text[]
+    # - Safely cast details TEXT to jsonb only when non-empty, then ->> 'vendor'
+    sql_claims = """
         SELECT
             ec.claim_id,
             ec.employee_id,
@@ -365,60 +422,35 @@ def load_manager_pending_claims(manager_id: str, limit: int = 100) -> pd.DataFra
             ec.amount,
             ec.currency,
             ec.status,
-            COALESCE(ec.vendor_name, ec.details->>'vendor') AS vendor_name,
+            COALESCE(
+                ec.vendor_name,
+                CASE
+                    WHEN ec.details IS NOT NULL AND ec.details <> ''
+                    THEN (ec.details::jsonb ->> 'vendor')
+                    ELSE NULL
+                END
+            ) AS vendor_name,
             ec.claim_date
         FROM expense_claims ec
         INNER JOIN employees e
             ON e.employee_id = ec.employee_id
         WHERE
-            e.manager_id = %(mgr_id)s
-            AND ec.status = 'Pending Review'
+            ec.employee_id = ANY(%(emp_ids)s::text[])
+            AND ec.status IN ('Pending Review', 'Pending')
         ORDER BY ec.claim_date DESC, ec.claim_id DESC
-        LIMIT %(limit_val)s
     """
-    df, err = _safe_read_sql(sql, {"mgr_id": manager_id, "limit_val": int(limit)})
+    df, err = _safe_read_sql(sql_claims, {"emp_ids": emp_ids})
     if err:
         return _empty_df([
-            "claim_id", "employee_id", "user_name", "claim_type",
-            "amount", "currency", "status", "vendor_name", "claim_date"
+            "claim_id","employee_id","user_name","claim_type",
+            "amount","currency","status","vendor_name","claim_date"
         ])
+
+    # If claim_date is string, try making it datetime for nicer Streamlit formatting
+    if "claim_date" in df.columns:
+        try:
+            df["claim_date"] = pd.to_datetime(df["claim_date"])
+        except Exception:
+            pass
+
     return df
-
-
-def load_finance_pending_claims(limit: int = 200) -> pd.DataFrame:
-    """
-    Finance view: list all claims waiting for finance (adjust status as per your workflow).
-    For example, include both 'Pending Review' and 'Manager Approved'.
-    """
-    sql = """
-        SELECT
-            ec.claim_id,
-            ec.employee_id,
-            COALESCE(
-                NULLIF(TRIM(CONCAT(e.first_name, ' ', e.last_name)), ''),
-                ec.employee_id
-            ) AS user_name,
-            ec.expense_category AS claim_type,
-            ec.amount,
-            ec.currency,
-            ec.status,
-            COALESCE(ec.vendor_name, ec.details->>'vendor') AS vendor_name,
-            ec.claim_date
-        FROM expense_claims ec
-        LEFT JOIN employees e
-            ON e.employee_id = ec.employee_id
-        WHERE ec.status IN ('Pending Review', 'Manager Approved')
-        ORDER BY ec.claim_date DESC, ec.claim_id DESC
-        LIMIT %(limit_val)s
-    """
-    df, err = _safe_read_sql(sql, {"limit_val": int(limit)})
-    if err:
-        return _empty_df([
-            "claim_id", "employee_id", "user_name", "claim_type",
-            "amount", "currency", "status", "vendor_name", "claim_date"
-        ])
-    return df
-
-
-# @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-
