@@ -5,8 +5,6 @@ from sqlalchemy import String, Numeric, Integer, Text, Index, UniqueConstraint, 
 import database as _database 
 from datetime import date
 
-
-
 class Employee(_database.Base):
     __tablename__ = "employees"
 

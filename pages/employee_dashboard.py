@@ -13,6 +13,9 @@ import agent as _agent  # must expose run_validation_agent(...)
 from db_utils import save_expense_claim, log_validation_result
 
 from claims_dashboard import load_recent_claims
+
+import utils as mail_utils
+import db_utils  
 # -------------------------------------------------
 # PAGE CONFIG (must be first Streamlit call)
 # -------------------------------------------------
@@ -29,6 +32,26 @@ Path(OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
 
 input_dir = Path("./input/images")
 input_dir.mkdir(parents=True, exist_ok=True)
+
+
+
+# Email helper function
+
+def _resolve_employee_email(emp_id: str, payload_out: dict) -> str | None:
+    # prefer the form’s buyer.email if present
+    buyer_email = deep_get(payload_out, "buyer.email")
+    if buyer_email:
+        return buyer_email
+
+    try:
+        rows = db_utils.get_employee_details(emp_id)
+        if rows:
+            rec = rows[0] if isinstance(rows, list) else rows
+            return rec.get("email")
+    except Exception:
+        pass
+    return None
+
 
 # -------------------------------------------------
 # SESSION ENFORCERS AND NAV HELPERS
