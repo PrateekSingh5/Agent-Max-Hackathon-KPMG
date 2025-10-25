@@ -634,24 +634,7 @@ def extractor_node_ui(emp_id: str, output_dir: str, input_dir: Path):
         # user clicked Submit inside the category form
         st.session_state.ui_step = "form"
 
-        # 1) Save claim
-
-
-        # 2) Run validation (no extra button)
-        #    Option A: call your in-process agent function (preferred)
-        # try:
-        #     validation_json = _agent.run_validation_agent(
-        #         employee_id=payload_out.get("employee_id") or emp_id,
-        #         claim_id=claim_id,
-        #         payload_out=payload_out,
-        #     )
-        # except Exception as agent_ex:
-        #     validation_json = {
-        #         "status": "ValidationError",
-        #         "auto_approved": False,
-        #         "payment_mode": payload_out.get("payment_mode"),
-        #         "error_msg": str(agent_ex),
-        #     }
+    
 
         # --- If you prefer to keep the FastAPI call instead of _agent.run_validation_agent, use this:
         try:
@@ -688,7 +671,7 @@ def extractor_node_ui(emp_id: str, output_dir: str, input_dir: Path):
             summary = log_validation_result(
                 claim_id=claim_id,
                 employee_id=payload_out.get("employee_id") or emp_id,
-                validation_obj=tag,
+                validation_obj=status,
             )
         except Exception as log_ex:
             summary = {
@@ -706,44 +689,7 @@ def extractor_node_ui(emp_id: str, output_dir: str, input_dir: Path):
             st.json(validation_json)
 
 
-    # if payload_out is not None:
-    #     # user clicked Submit inside the category form
-    #     st.session_state.last_payload = payload_out
-    #     st.session_state.ui_step = "form"
-
-    #     # Write to DB
-    #     try:
-    #         claim_id = save_expense_claim(payload_out)
-    #         st.success(f"✅ Expense Claim saved successfully! Claim ID: **{claim_id}**")
-    #     except Exception as e:
-    #         st.error(f"❌ Database insert failed: {e}")
-
-    # # Read-only extracted items
-    # if isinstance(payload.get("items", None), list):
-    #     with st.expander("View extracted line items (read-only)"):
-    #         st.json(payload["items"])
-
-    # # Validate final JSON (only if we have last_payload)
-    # if st.session_state.get("last_payload"):
-    #     st.markdown("---")
-    #     st.write("**⚙️ Validate the Final JSON (after your review)**")
-    #     if st.button("✅ Submit & Validate", key="run_agent_validate", use_container_width=True):
-    #         try:
-    #             # For validate phase we assume FastAPI expects phase in query OR body.
-    #             # We'll send as query param 'phase=validate' + full JSON body.
-    #             r = requests.post(
-    #                 AGENT_ENDPOINT,
-    #                 params={"phase": "validate"},
-    #                 json=st.session_state.last_payload,
-    #                 timeout=120
-    #             )
-    #             st.write(f"**Status:** {r.status_code}")
-    #             try:
-    #                 st.json(r.json())
-    #             except ValueError:
-    #                 st.code(r.text)
-    #         except requests.exceptions.RequestException as e:
-    #             st.error(f"Connection error: {e}")
+   
 
 # -------------------------------------------------
 # DASHBOARD WRAPPER
@@ -809,5 +755,4 @@ with tab_claims:
     show_claims_dashboard()
 
 
-# @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 

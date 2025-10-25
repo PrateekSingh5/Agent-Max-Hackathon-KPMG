@@ -454,3 +454,55 @@ def load_manager_team_pending_claims(
             pass
 
     return df
+
+
+
+def load_finance_pending_claims() -> pd.DataFrame:
+    """
+    Return ALL claims that are routed to Finance:
+      status = 'Finance Pending'
+    Includes vendor_name fallback from details JSON (if text column).
+    No LIMIT here (caller/Streamlit can paginate if needed).
+    """
+    sql_claims = """
+        SELECT
+            ec.claim_id,
+            ec.employee_id,
+            COALESCE(
+                NULLIF(TRIM(CONCAT(e.first_name, ' ', e.last_name)), ''),
+                ec.employee_id
+            ) AS user_name,
+            ec.expense_category AS claim_type,
+            ec.amount,
+            ec.currency,
+            ec.status,
+            COALESCE(
+                ec.vendor_name,
+                CASE
+                    WHEN ec.details IS NOT NULL AND ec.details <> ''
+                    THEN (ec.details::jsonb ->> 'vendor')
+                    ELSE NULL
+                END
+            ) AS vendor_name,
+            ec.claim_date
+        FROM expense_claims ec
+        INNER JOIN employees e
+            ON e.employee_id = ec.employee_id
+        WHERE
+            ec.status = 'Finance Pending'
+        ORDER BY ec.claim_date DESC, ec.claim_id DESC
+    """
+    df, err = _safe_read_sql(sql_claims, params=None)
+    if err:
+        return _empty_df([
+            "claim_id","employee_id","user_name","claim_type",
+            "amount","currency","status","vendor_name","claim_date"
+        ])
+
+    if "claim_date" in df.columns:
+        try:
+            df["claim_date"] = pd.to_datetime(df["claim_date"])
+        except Exception:
+            pass
+
+    return df

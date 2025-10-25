@@ -813,51 +813,6 @@ with tab_claims:
     show_claims_dashboard()
 
 
-# def manager_approve():
-#         # Only managers should see this tab meaningfully
-#     if st.session_state.get("access_label") != "M":
-#         st.warning("You do not have manager approval rights.")
-#     else:
-#         mgr_id = st.session_state.get("emp_id")
-
-#         if not mgr_id:
-#             st.error("Cannot resolve your manager ID (emp_id missing in session). Please re-login.")
-#         else:
-#             try:
-#                 pending_df = load_manager_pending_claims(mgr_id, limit=100)
-
-#                 st.write(pending_df)
-
-#                 if pending_df is None or pending_df.empty:
-#                     st.info("🎉 No pending claims from your direct reports.")
-#                 else:
-#                     st.caption(
-#                         "These are expense claims from your direct reports currently in 'Pending Review'."
-#                     )
-
-#                     st.dataframe(
-#                         pending_df,
-#                         use_container_width=True,
-#                         hide_index=True,
-#                         column_config={
-#                             "claim_id": "Claim ID",
-#                             "user_name": "Employee Name",
-#                             "claim_type": "Claim Type",
-#                             "amount": st.column_config.NumberColumn(format="₹ %.2f"),
-#                             "currency": "Currency",
-#                             "status": "Status",
-#                             "vendor_name": "Vendor",
-#                             "claim_date": st.column_config.DatetimeColumn(format="YYYY-MM-DD"),
-#                         },
-#                     )
-
-#                     with st.expander("Raw data (debug)"):
-#                         st.write(pending_df)
-
-#             except Exception as e:
-#                 st.error(f"Failed to load pending approvals: {e}")
-
-
 def manager_approve():
     """
     Show a table of all 'Pending Review' / 'Pending' claims for this manager's direct reports.

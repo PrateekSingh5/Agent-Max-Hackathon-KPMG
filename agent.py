@@ -95,33 +95,79 @@ INSTRUCTIONS_PDF = (
     "- Respond with ONLY valid JSON."
 )
 
+
+# INSTRUCTIONS_VALIDATION = (
+#     "You are an Expense Policy Validation Agent.\n\n"
+#     "Your job: Decide how to route an expense claim and return ONLY ONE valid JSON object.\n\n"
+#     "Inputs are employee, policy, and invoice objects.\n"
+#     "Decision rules (use these exact tags/decisions):\n"
+#     "- If spent <= allowed: tag = 'Auto Approved', decision = 'Approved'\n"
+#     "- If percent over > 25%: tag = 'Rejected', decision = 'Reject'\n"
+#     "- If percent over > 10% and < 25%: tag = 'Finance Pending', decision = 'Send to Finance Team'\n"
+#     "- If percent over >= 0% and <= 10%: tag = 'Manager Pending', decision = 'Send to Manager'\n"
+#     "- If policy is missing/invalid (no allowed_amount or not found): tag = 'Finance Pending', decision = 'Send to Finance Team'\n\n"
+#     "Computations:\n"
+#     "- allowed_amount := policy.max_allowance (number) or null if unavailable\n"
+#     "- percent over := ((spent - allowed) / allowed) * 100; if allowed is null or 0, set percent_diff to null and use policy-missing branch\n"
+#     "- Round percent_diff to 2 decimals\n\n"
+#     "Output JSON shape:\n"
+#     "{\n"
+#     '  \"tag\": \"<Auto Approved | Finance Pending | Pending |  Rejected>\",\n'
+#     '  \"decision\": \"<Approved | Send to Finance Team | Send to Manager | Reject>\",\n'
+#     '  \"message\": \"<summary mentioning employee name or id, grade, spent vs allowed, reason>\",\n'
+#     '  \"metrics\": {\n'
+#     '    \"grade\": \"<employee.grade>\",\n'
+#     '    \"category\": \"<invoice.category>\",\n'
+#     "    \"allowed_amount\": <number or null>,\n"
+#     "    \"spent_amount\": <number>,\n"
+#     "    \"percent_diff\": <number or null>,\n"
+#     '    \"currency\": \"<invoice.currency or policy.currency>\"\n'
+#     "  }\n"
+#     "}\n"
+#     "- All numbers must be numeric types.\n"
+#     "- Return ONLY the JSON object. No markdown or analysis outside JSON."
+# )
+
+
 INSTRUCTIONS_VALIDATION = (
     "You are an Expense Policy Validation Agent.\n\n"
     "Your job: Decide how to route an expense claim and return ONLY ONE valid JSON object.\n\n"
-    "Inputs are employee, policy, and invoice objects.\n"
-    "Decision rules:\n"
-    "- If spent <= allowed: Auto Approved / Approved\n"
-    "- If >25% over: Rejected / Reject\n"
-    "- If 10%–25% over: Pending / Send to Finance Team\n"
-    "- If 0%–10% over: Pending / Send to Manager\n"
-    "- Missing/invalid policy: Pending / Send to Finance Team\n\n"
+    "Inputs are employee, policy, and invoice objects.\n\n"
+    "Definitions:\n"
+    "- allowed_amount := policy.max_allowance (number) or null if unavailable\n"
+    "- spent_amount  := invoice.total_amount (number)\n"
+    "- percent_over  := ((spent_amount - allowed_amount) / allowed_amount) * 100, only if allowed_amount > 0; otherwise null\n"
+    "- Round percent_over (reported as percent_diff) to 2 decimals\n\n"
+    "Case-wise tagging (apply in this order):\n"
+    "1) Missing/invalid policy (allowed_amount is null or <= 0):\n"
+    "   tag = 'Finance Pending', decision = 'Send to Finance Team'\n"
+    "2) If spent_amount <= allowed_amount:\n"
+    "   tag = 'Auto Approved', decision = 'Approved'\n"
+    "3) If percent_over > 25:\n"
+    "   tag = 'Rejected', decision = 'Reject'\n"
+    "4) If percent_over > 10 and percent_over < 25:\n"
+    "   tag = 'Finance Pending', decision = 'Send to Finance Team'\n"
+    "5) If percent_over >= 0 and percent_over <= 10:\n"
+    "   tag = 'Pending', decision = 'Send to Manager'\n\n"
     "Output JSON shape:\n"
     "{\n"
-    '  "tag": "<Auto Approved | Pending | Rejected>",\n'
-    '  "decision": "<Approved | Send to Manager | Send to Finance Team | Reject>",\n'
-    '  "message": "<summary mentioning employee name or id, grade, spent vs allowed, reason>",\n'
-    '  "metrics": {\n'
-    '    "grade": "<employee.grade>",\n'
-    '    "category": "<invoice.category>",\n'
+    '  \"tag\": \"<Auto Approved | Finance Pending | Pending | Rejected>\",\n'
+    '  \"decision\": \"<Approved | Send to Finance Team | Send to Manager | Reject>\",\n'
+    '  \"message\": \"<summary mentioning employee name or id, grade, spent vs allowed, reason>\",\n'
+    '  \"metrics\": {\n'
+    '    \"grade\": \"<employee.grade>\",\n'
+    '    \"category\": \"<invoice.category>\",\n'
     "    \"allowed_amount\": <number or null>,\n"
     "    \"spent_amount\": <number>,\n"
     "    \"percent_diff\": <number or null>,\n"
-    '    "currency": "<invoice.currency or policy.currency>"\n'
+    '    \"currency\": \"<invoice.currency or policy.currency>\"\n'
     "  }\n"
-    "}\n"
-    "- All numbers must be numeric types. percent_diff rounded to 2 decimals.\n"
-    "- No markdown or analysis outside JSON."
+    "}\n\n"
+    "- All numeric fields must be numbers (not strings).\n"
+    "- Return ONLY the JSON object. No markdown or analysis outside JSON."
 )
+
+
 
 # =========================================================
 # UTILITIES
@@ -411,9 +457,9 @@ def _enforce_validation_rules(employee_row, policy_row, invoice_payload_dict) ->
     Hard, deterministic routing according to the specified rules:
       - If spent <= allowed: Auto Approved / Approved
       - If >25% over: Rejected / Reject
-      - If 10%–25% over: Pending / Send to Finance Team
+      - If 10%–25% over: Finance Pending / Send to Finance Team
       - If 0%–10% over: Pending / Send to Manager
-      - Missing/invalid policy: Pending / Send to Finance Team
+      - Missing/invalid policy: Finance Pending / Send to Finance Team
     """
     first_name = last_name = grade = manager_id = None
     if employee_row:
@@ -427,10 +473,10 @@ def _enforce_validation_rules(employee_row, policy_row, invoice_payload_dict) ->
     spent_amount = float(invoice_payload_dict.get("total_amount") or 0.0)
     currency = invoice_payload_dict.get("currency") or (policy_row or {}).get("currency") or "INR"
 
-    # No policy / invalid policy -> Finance
+    # Missing / invalid policy => Finance Pending
     if not policy_row or policy_row.get("max_allowance") is None:
         return {
-            "tag": "Pending",
+            "tag": "Finance Pending",
             "decision": "Send to Finance Team",
             "message": (
                 f"{emp_display} (Grade {grade}) submitted a {category} expense of "
@@ -451,7 +497,7 @@ def _enforce_validation_rules(employee_row, policy_row, invoice_payload_dict) ->
     allowed_amount = float(policy_row.get("max_allowance") or 0.0)
     if allowed_amount <= 0:
         return {
-            "tag": "Pending",
+            "tag": "Finance Pending",
             "decision": "Send to Finance Team",
             "message": (
                 f"{emp_display} (Grade {grade}) submitted a {category} expense of "
@@ -482,7 +528,7 @@ def _enforce_validation_rules(employee_row, policy_row, invoice_payload_dict) ->
     elif pd2 <= 10:
         tag, decision, reason = "Pending", "Send to Manager", "Exceeds the policy limit by up to 10%. Send to manager."
     elif pd2 <= 25:
-        tag, decision, reason = "Pending", "Send to Finance Team", "Exceeds the policy limit by 10%–25%. Finance review."
+        tag, decision, reason = "Finance Pending", "Send to Finance Team", "Exceeds the policy limit by 10%–25%. Finance review."
     else:
         tag, decision, reason = "Rejected", "Reject", "Exceeds the policy limit by more than 25%. Rejected."
 
