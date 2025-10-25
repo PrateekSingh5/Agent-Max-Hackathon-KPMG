@@ -1,8 +1,10 @@
-from fastapi import FastAPI ,  HTTPException, Query, Request, Header , Depends
+# app.py
+
+from fastapi import FastAPI, HTTPException, Query, Request, Header, Depends
 import image_extraction as ie
 import schema as _schema
 import services as _services
-from  sqlalchemy import orm as _orm
+from sqlalchemy import orm as _orm
 import fastapi as _fastapi
 import db_utils as _db_utils
 from typing import List, TYPE_CHECKING
@@ -14,7 +16,6 @@ import os
 
 from fastapi.encoders import jsonable_encoder
 
-
 app = _fastapi.FastAPI()
 
 LAST_EMP_ID: str | None = None
@@ -24,18 +25,25 @@ EMP_DETAILS = []
 OUT_DIR = Path(os.environ.get("OUT_DIR", "./output/langchain_json"))
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
+
+# -----------------------------
+# Basic extraction endpoints
+# -----------------------------
 @app.post("/extract_image_data", response_class=JSONResponse, status_code=status.HTTP_200_OK)
 def get_image_data(
     image_name: str = Query(..., description="Name of the image file"),
-    emp_id: str = Query(..., description="Enter Employee ID"),  # ensures emp_id is present + set on request.state
+    emp_id: str = Query(..., description="Enter Employee ID"),
 ):
+    """
+    Simple passthrough to image_extraction module, stores output json for the given image.
+    Also sets LAST_EMP_ID to allow subsequent calls that need the context.
+    """
     global LAST_EMP_ID
     try:
         LAST_EMP_ID = emp_id
-
         img_json = ie.extract_json_from_image(image_name, emp_id)
         ie.save_json(img_json, OUT_DIR, image_name)
-        return {"image_name": image_name,  "data": img_json}
+        return {"image_name": image_name, "data": img_json}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -43,51 +51,65 @@ def get_image_data(
 @app.post("/extract_pdf_data", response_class=JSONResponse, status_code=status.HTTP_200_OK)
 def get_pdf_data(
     pdf_name: str = Query(..., description="Name of the PDF file"),
-    emp_id: str = Query(..., description="Enter Employee ID"),  # ensures emp_id is present + set on request.state
+    emp_id: str = Query(..., description="Enter Employee ID"),
 ):
+    """
+    Simple passthrough to image_extraction module for PDFs, stores output json.
+    Also sets LAST_EMP_ID to allow subsequent calls that need the context.
+    """
     global LAST_EMP_ID
     try:
         LAST_EMP_ID = emp_id
-
+        # Your ie module has extract_json_from_pdf_text; keep it as-is.
         pdf_json = ie.extract_json_from_pdf_text(pdf_name)
         ie.save_json(pdf_json, OUT_DIR, pdf_name)
-        return {"pdf_name": pdf_name,  "data": pdf_json}
+        return {"pdf_name": pdf_name, "data": pdf_json}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
 
 # --- Example: any other API can reuse emp_id without new params ---
 @app.get("/whoami")
 def whoami():
-    """Return the last emp_id received in /test"""
+    """Return the last emp_id received"""
     if not LAST_EMP_ID:
-        raise HTTPException(status_code=404, detail="No emp_id found. Call /test first.")
+        raise HTTPException(status_code=404, detail="No emp_id found. Call a route that sets it first.")
     return {"emp_id": LAST_EMP_ID}
+
 
 @app.get("/api/employee_details")
 def get_employee_details():
+    """
+    Returns employee details for the LAST_EMP_ID captured earlier.
+    Use one of the extraction endpoints (or /api/Agent with emp_id) before calling this.
+    """
     global EMP_DETAILS
 
-    # check if emp_id is set
     if not LAST_EMP_ID:
-        raise HTTPException(status_code=404, detail="No emp_id found. Call /test first.")
-    EMP_DETAILS =  _db_utils.get_employee_details(LAST_EMP_ID)
+        raise HTTPException(status_code=404, detail="No emp_id found. Call a route that sets it first.")
+    EMP_DETAILS = _db_utils.get_employee_details(LAST_EMP_ID)
 
     if not EMP_DETAILS:
         raise HTTPException(status_code=404, detail=f"No employee found for id '{LAST_EMP_ID}'")
 
-    # append to the global list
-    print("Fetched EMP_DETAIL'S from DB:", EMP_DETAILS)
-    return  EMP_DETAILS
+    print("Fetched EMP_DETAILS from DB:", EMP_DETAILS)
+    return EMP_DETAILS
 
 
+# -----------------------------
+# DB-backed claim creation demo
+# -----------------------------
 @app.post("/api/InvoiceData", response_model=_schema.ExpenseClaims)
 async def create_expense_claims(
     expense_claims: _schema.createExpenseClaims,
     db: _orm.Session = _fastapi.Depends(_services.get_db)
 ):
-    return await _services.create_expense_claims(expense_claims=expense_claims, db=db) 
+    return await _services.create_expense_claims(expense_claims=expense_claims, db=db)
 
 
+# -----------------------------
+# Legacy extractor-only entry
+# -----------------------------
 @app.post("/api/ExtractorAgent")
 async def extractor_agent(
     image_name: str = Query(..., description="Name of the image file"),
@@ -95,21 +117,25 @@ async def extractor_agent(
     json_out_dir: str = Query(..., description="Directory to save JSON output"),
     save_json_file: bool = Query(..., description="Flag to save JSON file"),
 ):
-    state = {"file_path": image_name , 
+    """
+    Runs extraction only using agent.extract_node and returns the internal state.
+    """
+    state = {
+        "file_path": image_name,
         "employee_id_hint": emp_id,
         "json_out_dir": json_out_dir,
-        "save_json_file": save_json_file
-        }
-
-    final_state  = _agent.extract_node(state)
+        "save_json_file": save_json_file,
+    }
+    final_state = _agent.extract_node(state)
     return final_state
 
 
-
+# -----------------------------
+# Unified Agent endpoint
+# -----------------------------
 @app.post("/api/Agent", response_class=JSONResponse, status_code=status.HTTP_200_OK)
 async def agent_router(
     request: Request,
-    # Query fallbacks (body is also supported; see pick() below)
     image_name: str | None = Query(default=None, description="Path to file on server (image/pdf)"),
     emp_id: str | None = Query(default=None, description="Employee ID"),
     json_out_dir: str = Query(default="./output/langchain_json", description="Directory to save JSON"),
@@ -119,9 +145,11 @@ async def agent_router(
     """
     Unified Agent endpoint:
       - phase=extract  : run extraction only, return normalized payload for UI
-      - phase=validate : expects edited JSON payload in body; runs policy validation only
-      - phase=full     : extract + validate in one shot (minimal summary)
+      - phase=validate : expects edited JSON payload in body; runs policy validation only (returns comments)
+      - phase=full     : extract + validate in one shot (returns comments)
     """
+    global LAST_EMP_ID
+
     phase = (phase or "extract").lower()
 
     # Read JSON body once (if present)
@@ -133,7 +161,10 @@ async def agent_router(
     except Exception:
         body = None
 
-    # Capture query args in a map so inner pick() can read them
+    # capture LAST_EMP_ID if provided
+    if emp_id:
+        LAST_EMP_ID = emp_id
+
     query_map = {
         "image_name": image_name,
         "emp_id": emp_id,
@@ -142,16 +173,12 @@ async def agent_router(
         "phase": phase,
     }
 
-    # Resolver: prefer query param, then body field, then provided fallbacks
     def pick(field_name: str, *fallbacks):
-        # 1) value from query map
         val = query_map.get(field_name, None)
         if val is not None:
             return val
-        # 2) value from JSON body
         if body and (field_name in body) and (body[field_name] is not None):
             return body[field_name]
-        # 3) fallbacks
         for fb in fallbacks:
             if fb is not None:
                 return fb
@@ -164,7 +191,7 @@ async def agent_router(
         if not body:
             raise HTTPException(status_code=400, detail="Expected JSON body for phase=validate")
 
-        # Coerce to canonical schema (handles dates/totals/items/category normalization)
+        # Normalize incoming payload via Pydantic (dates/amounts/items)
         try:
             inv = _agent.InvoicePayload(**body)
         except Exception as e:
@@ -173,58 +200,57 @@ async def agent_router(
         if not inv.employee_id:
             raise HTTPException(status_code=400, detail="employee_id is required in the payload")
 
-        # Load employee row
-        employees_df = _agent.load_employees_df(inv.employee_id)
-        if employees_df.empty:
-            return JSONResponse(
-                content=jsonable_encoder({
-                    "Final tag": "Reject",
-                    "Decision": "Reject",
-                    "Findings": [{
-                        "severity": "HARD",
-                        "rule_id": "EMP-404",
-                        "message": f"Employee '{inv.employee_id}' not found"
-                    }]
-                }),
-                status_code=200
-            )
+        payload_dict = inv.model_dump(mode="python")
 
-        # Resolve grade → fetch policies
-        emp_grade = employees_df["grade"].iloc[0] if "grade" in employees_df.columns else None
+        # Load employee row from your DB utils
+        employee_details_list = _db_utils.get_employee_details(inv.employee_id)
+        employee_row = employee_details_list[0] if employee_details_list else None
+        if not employee_row:
+            result = {
+                "tag": "Rejected",
+                "decision": "Reject",
+                "message": f"Employee '{inv.employee_id}' not found",
+                "metrics": None,
+                "rule_band": "no_policy"
+            }
+            return JSONResponse(content=jsonable_encoder({
+                "tag": result["tag"],
+                "decision": result["decision"],
+                "comments": result["message"],   # <- UI-friendly comment
+                "validation": result
+            }), status_code=200)
+
+        # Resolve policies for this grade and pick one for the category
+        emp_grade = employee_row.get("grade")
         if not emp_grade:
-            return JSONResponse(
-                content=jsonable_encoder({
-                    "Final tag": "Send for validation",
-                    "Decision": "Send for validation",
-                    "Findings": [{
-                        "severity": "SOFT",
-                        "rule_id": "EMP-000",
-                        "message": "Employee grade not available; manual review required"
-                    }]
-                }),
-                status_code=200
-            )
+            result = {
+                "tag": "Pending",
+                "decision": "Send to Finance Team",
+                "message": "Employee grade not available; manual review required",
+                "metrics": None,
+                "rule_band": "no_policy"
+            }
+            return JSONResponse(content=jsonable_encoder({
+                "tag": result["tag"],
+                "decision": result["decision"],
+                "comments": result["message"],   # <- UI-friendly comment
+                "validation": result
+            }), status_code=200)
 
         policies_df = _agent.load_policies_df(emp_grade)
+        policies_list = policies_df.to_dict("records")
+        policy_row = _agent._pick_policy_for(employee_details_list, policies_list, payload_dict.get("category"))
 
-        # Run validation
-        validator = _agent.ValidationAgent(employees_df, policies_df)
-        result = validator.validate(inv)
+        # Run validator (deterministic + optional LLM message)
+        validator = _agent.ValidationAgent(use_llm_message=True)
+        result = validator.validate(employee_row, policy_row, payload_dict)
 
-        findings_list = [{
-            "severity": f.severity,
-            "rule_id": f.rule_id,
-            "message": f.message
-        } for f in (result.findings or [])]
-
-        return JSONResponse(
-            content=jsonable_encoder({
-                "Final tag": result.decision.value,
-                "Decision": result.decision.value,
-                "Findings": findings_list
-            }),
-            status_code=200
-        )
+        return JSONResponse(content=jsonable_encoder({
+            "tag": result.get("tag"),
+            "decision": result.get("decision"),
+            "comments": result.get("message"),   # <- UI-friendly comment
+            "validation": result
+        }), status_code=200)
 
     # -------------------------
     # EXTRACT ONLY (for UI form)
@@ -238,27 +264,32 @@ async def agent_router(
         if not img:
             raise HTTPException(status_code=400, detail="image_name is required for phase=extract")
 
+        if eid:
+            LAST_EMP_ID = eid
+
         state = {
             "file_path": img,
             "employee_id_hint": eid,
             "json_out_dir": outdir,
             "save_json_file": save,
         }
-        # Extract node only (no validation yet)
+
+        # Extract node only (no validation yet) -> returns dict in state['extraction']
         state = _agent.extract_node(state)
         extraction = state.get("extraction")
         if not extraction:
             raise HTTPException(status_code=500, detail="Extraction failed")
 
-        # Ensure JSON-safe payload (dates → ISO)
-        payload_dict = extraction.payload.model_dump(mode="json")
+        # Ensure JSON-safe payload (dates → ISO) from the dict
+        payload_json = _agent.payload_to_json_ready(extraction["payload"])
 
         return JSONResponse(
             content=jsonable_encoder({
+                "process_id": state.get("process_id"),
                 "extraction": {
-                    "payload": payload_dict,
-                    "ocr_engine": extraction.ocr_engine,
-                    "raw_text_preview": extraction.raw_text_preview
+                    "payload": payload_json,
+                    "ocr_engine": extraction.get("ocr_engine"),
+                    "raw_text_preview": extraction.get("raw_text_preview")
                 }
             }),
             status_code=200
@@ -276,37 +307,37 @@ async def agent_router(
         if not img:
             raise HTTPException(status_code=400, detail="image_name is required for phase=full")
 
+        if eid:
+            LAST_EMP_ID = eid
+
         state = {
             "file_path": img,
             "employee_id_hint": eid,
             "json_out_dir": outdir,
             "save_json_file": save
         }
-        final_state = _agent.graph.invoke(state)
 
-        validation = final_state.get("validation")
-        if not validation:
-            return JSONResponse(
-                content=jsonable_encoder({
-                    "Final tag": final_state.get("tag"),
-                    "Decision": None,
-                    "Findings": [],
-                    "error": "Validation stage failed or missing"
-                }),
-                status_code=500
-            )
+        # Run pipeline explicitly (no graph.invoke)
+        state = _agent.extract_node(state)
+        state = _agent.validate_node(state)
 
-        findings_list = [{
-            "severity": f.severity,
-            "rule_id": f.rule_id,
-            "message": f.message
-        } for f in (validation.findings or [])]
+        extraction = state.get("extraction") or {}
+        payload_json = _agent.payload_to_json_ready(extraction.get("payload", {}))
+        validation = state.get("validation") or {}
 
         return JSONResponse(
             content=jsonable_encoder({
-                "Final tag": final_state.get("tag"),
-                "Decision": validation.decision.value if validation.decision else None,
-                "Findings": findings_list
+                "process_id": state.get("process_id"),
+                "extraction": {
+                    "payload": payload_json,
+                    "ocr_engine": extraction.get("ocr_engine"),
+                    "raw_text_preview": extraction.get("raw_text_preview"),
+                },
+                "validation": validation,
+                "tag": state.get("tag"),
+                "decision": state.get("decision"),
+                # Provide the human-friendly rationale right on the top-level for UI
+                "comments": (validation.get("message") if isinstance(validation, dict) else None),
             }),
             status_code=200
         )

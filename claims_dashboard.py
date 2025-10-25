@@ -18,7 +18,7 @@ def load_recent_claims(employee_id: str, limit: int = 50):
             ec.amount,
             ec.currency,
             ec.status,
-            ec.vendor_id AS vendor_name,
+            ec.vendor_name AS vendor_name,
             ec.claim_date
         FROM expense_claims ec
         LEFT JOIN employees e ON e.employee_id = ec.employee_id

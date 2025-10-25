@@ -1,22 +1,17 @@
 {
   "invoice_number": "No2025364",
   "date": "2024-12-19",
-  "seller": "agoda",
-  "buyer": {
-    "name": "Saanvi Singh",
-    "email": "saanvi.singh90@company.com"
+  "currency": "INR",
+  "total_amount": 24684.0,
+  "category": "Hotel",
+  "seller": {
+    "name": "Regal Resort Suites",
+    "location": "Road 35, Mumbai, India"
   },
-  "booking_details": {
-    "property_name": "Regal Resort Suites",
-    "property_address": "Road 35, Mumbai, India",
-    "booking_number": "803472364",
-    "payment_reference": "TGF4-UBD",
-    "check_in": "2024-12-23",
-    "check_out": "2025-01-03"
-  },
-  "amount_paid": {
-    "date": "2024-12-19",
-    "value": 24684,
-    "currency": "INR"
-  }
+  "items": [],
+  "check_in": "2024-12-23",
+  "check_out": "2025-01-03",
+  "booking_number": "803472364",
+  "_source_file": "agoda_invoice_41.png",
+  "Employee ID": "W1106"
 }

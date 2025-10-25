@@ -1,21 +1,17 @@
 {
   "invoice_number": "No2024328",
   "date": "2024-09-26",
-  "vendor": "agoda",
-  "category": "hotel",
-  "buyer": {
-    "name": "Saanvi Verma",
-    "email": "saanvi.verma111@company.com"
-  },
-  "booking_details": {
-    "property_name": "Emerald Retreat Hotel",
-    "property_address": "Road 42, Hyderabad, India",
-    "booking_number": "890861833",
-    "payment_reference": "C89A-LLT",
-    "check_in": "2024-09-30",
-    "check_out": "2024-10-01"
-  },
+  "currency": "INR",
   "total_amount": 2121.0,
-  "Employee ID": "E1024",
-  "_source_file": "agoda_invoice_42.png"
+  "category": "Hotel",
+  "seller": {
+    "name": "Emerald Retreat Hotel",
+    "location": "Road 42, Hyderabad, India"
+  },
+  "items": [],
+  "check_in": "2024-09-30",
+  "check_out": "2024-10-01",
+  "booking_number": "890861833",
+  "_source_file": "agoda_invoice_42.png",
+  "Employee ID": "E1024"
 }
