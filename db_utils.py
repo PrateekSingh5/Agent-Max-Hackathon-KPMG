@@ -350,7 +350,30 @@ def load_recent_claims(emp_id: str, limit: int = 50) -> pd.DataFrame:
         ])
     return df
 
+def manager_update_claim_decision(claim_id: str, decision: str, comment: str, approver_id: str) -> None:
+    """
+    decision: 'Approve' or 'Reject'
+    Updates expense_claims.status and stores manager comment if supported by your schema.
+    """
+    status_val = "Approved" if decision == "Approve" else "Rejected"
+    with engine.begin() as conn:
+        # If you have manager_comment + manager_id columns:
+        # conn.execute(text("""
+        #     UPDATE expense_claims
+        #     SET status = :status,
+        #         manager_comment = :comment,
+        #         manager_id = :mgr_id
+        #     WHERE claim_id = :claim_id
+        # """), {"status": status_val, "comment": comment, "mgr_id": approver_id, "claim_id": claim_id})
 
+        # Minimal version: update only status
+        conn.execute(text("""
+            UPDATE expense_claims
+            SET status = :status
+            WHERE claim_id = :claim_id
+        """), {"status": status_val, "claim_id": claim_id})
+
+        
 
 def load_manager_team_pending_claims(
     manager_email,

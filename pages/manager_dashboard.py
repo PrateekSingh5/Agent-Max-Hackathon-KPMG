@@ -813,36 +813,156 @@ with tab_claims:
     show_claims_dashboard()
 
 
+# def manager_approve():
+#     """
+#     Show a table of all 'Pending Review' / 'Pending' claims for this manager's direct reports.
+#     Implements:
+#       1) Resolve manager emp_id (from session or email)
+#       2) Find employees under that manager
+#       3) Fetch and display their pending claims (no limit)
+#     """
+#     if st.session_state.get("access_label") != "M":
+#         st.warning("You do not have manager approval rights.")
+#         return
+
+#     # Resolve manager identity from session (normal login flow)
+#     mgr_email = st.session_state.get("email", None)
+#     mgr_emp_id = st.session_state.get("emp_id", None)
+
+#     # Fallback: derive emp_id from email if missing
+
+#     try:
+#         df = load_manager_team_pending_claims(
+#             manager_email=mgr_email,
+#             manager_id=mgr_emp_id,
+#         )
+
+#         if df is None or df.empty:
+#             st.info("No pending claims from your direct reports.")
+#             return
+
+#         st.dataframe(
+#             df,
+#             use_container_width=True,
+#             hide_index=True,
+#             column_config={
+#                 "claim_id": "Claim ID",
+#                 "employee_id": "Employee ID",
+#                 "user_name": "Employee Name",
+#                 "claim_type": "Claim Type",
+#                 "amount": st.column_config.NumberColumn(format="₹ %.2f"),
+#                 "currency": "Currency",
+#                 "status": "Status",
+#                 "vendor_name": "Vendor",
+#                 "claim_date": st.column_config.DatetimeColumn(format="YYYY-MM-DD"),
+#             },
+#         )
+#     except Exception as e:
+#         st.error(f"Failed to load pending approvals: {e}")
+
+# ---------- Manager approval helpers ----------
+def _get_engine():
+    # Reuse a single engine per run
+    if "_manager_engine" not in st.session_state:
+        db_url = os.environ.get("DATABASE_URL") or st.secrets.get("DATABASE_URL", "")
+        if not db_url:
+            raise RuntimeError("DATABASE_URL not configured in env or st.secrets")
+        st.session_state._manager_engine = create_engine(db_url, future=True)
+    return st.session_state._manager_engine
+
+
+def _update_claim_decision_fallback(claim_id: str, decision: str, comment: str, approver_id: str):
+    """
+    Fallback direct-SQL updater if db_utils.manager_update_claim_decision is not available.
+    Tries to set status and manager_comment (if the column exists).
+    """
+    engine = _get_engine()
+    # Try safest path first: update only status
+    sql_basic = text("""
+        UPDATE expense_claims
+        SET status = :status
+        WHERE claim_id = :claim_id
+    """)
+    # If you have a manager_comment column, uncomment this block and comment out sql_basic above.
+    # sql_with_comment = text("""
+    #     UPDATE expense_claims
+    #     SET status = :status,
+    #         manager_comment = :comment,
+    #         manager_id = :mgr_id
+    #     WHERE claim_id = :claim_id
+    # """)
+    with engine.begin() as conn:
+        conn.execute(sql_basic, {
+            "status": "Approved" if decision == "Approve" else "Rejected",
+            "claim_id": claim_id,
+            # "comment": comment,
+            # "mgr_id": approver_id,
+        })
+
+
+def _apply_manager_decisions(rows_to_apply: list[dict], approver_id: str):
+    """
+    rows_to_apply: list of dicts containing claim_id, Decision, Manager Comment
+    """
+    # Prefer db_utils.manager_update_claim_decision if present
+    updater = getattr(__import__("db_utils"), "manager_update_claim_decision", None)
+
+    successes, failures = [], []
+    for r in rows_to_apply:
+        claim_id = str(r.get("claim_id", "")).strip()
+        decision = str(r.get("Decision", "")).strip()
+        comment  = str(r.get("Manager Comment", "")).strip()
+        if not claim_id or decision not in {"Approve", "Reject"}:
+            continue
+        try:
+            if callable(updater):
+                # Signature you can implement in db_utils:
+                # def manager_update_claim_decision(claim_id: str, decision: str, comment: str, approver_id: str) -> None: ...
+                updater(claim_id, decision, comment, approver_id)
+            else:
+                _update_claim_decision_fallback(claim_id, decision, comment, approver_id)
+            successes.append(claim_id)
+        except Exception as ex:
+            failures.append((claim_id, str(ex)))
+    return successes, failures
+
+
+
 def manager_approve():
     """
-    Show a table of all 'Pending Review' / 'Pending' claims for this manager's direct reports.
-    Implements:
-      1) Resolve manager emp_id (from session or email)
-      2) Find employees under that manager
-      3) Fetch and display their pending claims (no limit)
+    Manager view:
+      - shows pending team claims
+      - adds editable 'Decision' (Approve/Reject) and 'Manager Comment'
+      - writes decision to DB and refreshes table
     """
     if st.session_state.get("access_label") != "M":
         st.warning("You do not have manager approval rights.")
         return
 
-    # Resolve manager identity from session (normal login flow)
     mgr_email = st.session_state.get("email", None)
     mgr_emp_id = st.session_state.get("emp_id", None)
-
-    # Fallback: derive emp_id from email if missing
 
     try:
         df = load_manager_team_pending_claims(
             manager_email=mgr_email,
             manager_id=mgr_emp_id,
         )
-
         if df is None or df.empty:
             st.info("No pending claims from your direct reports.")
             return
 
-        st.dataframe(
-            df,
+        # Build an editable table view
+        work = df.copy()
+
+        # Add editable columns (blank by default)
+        if "Decision" not in work.columns:
+            work["Decision"] = ""
+        if "Manager Comment" not in work.columns:
+            work["Manager Comment"] = ""
+
+        st.markdown("### Pending Claims (Manager Review)")
+        edited = st.data_editor(
+            work,
             use_container_width=True,
             hide_index=True,
             column_config={
@@ -855,12 +975,76 @@ def manager_approve():
                 "status": "Status",
                 "vendor_name": "Vendor",
                 "claim_date": st.column_config.DatetimeColumn(format="YYYY-MM-DD"),
+                # Editable configs:
+                "Decision": st.column_config.SelectboxColumn(
+                    "Decision",
+                    options=["", "Approve", "Reject"],
+                    required=False,
+                    help="Choose Approve or Reject for each claim you want to act on."
+                ),
+                "Manager Comment": st.column_config.TextColumn(
+                    "Manager Comment",
+                    help="Optional note that will be stored with the decision."
+                ),
             },
+            # Make only Decision & Manager Comment editable
+            disabled=[
+                "claim_id", "employee_id", "user_name", "claim_type",
+                "amount", "currency", "status", "vendor_name", "claim_date"
+            ],
+            key="manager_editor",
         )
-    except Exception as e:
-        st.error(f"Failed to load pending approvals: {e}")
 
-        
+        c1, c2 = st.columns([1, 3])
+        with c1:
+            do_submit = st.button("Submit decisions", use_container_width=True)
+        with c2:
+            st.caption("Tip: leave Decision blank to skip a row.")
+
+        if do_submit:
+            # Collect only rows with a decision
+            rows = edited.fillna("").to_dict(orient="records")
+            to_apply = [r for r in rows if r.get("Decision") in {"Approve", "Reject"}]
+
+            if not to_apply:
+                st.info("No decisions to apply.")
+                return
+
+            ok, bad = _apply_manager_decisions(to_apply, approver_id=mgr_emp_id)
+
+            if ok:
+                st.success(f"Updated {len(ok)} claim(s): {', '.join(ok)}")
+            if bad:
+                st.error("Some updates failed:")
+                for cid, msg in bad:
+                    st.write(f"- {cid}: {msg}")
+
+            # Refresh table: drop the processed rows locally
+            if ok:
+                remaining = edited[~edited["claim_id"].isin(ok)].drop(columns=["Decision", "Manager Comment"], errors="ignore")
+                if remaining.empty:
+                    st.info("All pending items are processed. 🎉")
+                else:
+                    st.markdown("#### Remaining Pending Items")
+                    st.dataframe(
+                        remaining,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "claim_id": "Claim ID",
+                            "employee_id": "Employee ID",
+                            "user_name": "Employee Name",
+                            "claim_type": "Claim Type",
+                            "amount": st.column_config.NumberColumn(format="₹ %.2f"),
+                            "currency": "Currency",
+                            "status": "Status",
+                            "vendor_name": "Vendor",
+                            "claim_date": st.column_config.DatetimeColumn(format="YYYY-MM-DD"),
+                        },
+                    )
+
+    except Exception as e:
+        st.error(f"Failed to load pending approvals: {e}")       
 
 with tab_approve:
     manager_approve()

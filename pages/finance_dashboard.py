@@ -55,7 +55,7 @@ def ensure_finance_allowed():
     if not st.session_state.get("logged_in", False):
         st.error("Please login first.")
         if st.button("Go to Login"):
-            st.switch_page("test_portal_login.py")
+            st.switch_page("portal_login.py")
         st.stop()
 
     # --- Promote access_label to F if their employee record says Finance ---
