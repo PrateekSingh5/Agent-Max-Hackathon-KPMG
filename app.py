@@ -7,15 +7,15 @@ import services as _services
 from sqlalchemy import orm as _orm
 import fastapi as _fastapi
 import db_utils as _db_utils
-from typing import List, TYPE_CHECKING
+from typing import List, TYPE_CHECKING, Optional, Any, Dict
 from fastapi.responses import JSONResponse
 from starlette import status
 from pathlib import Path
 import agent as _agent
 import os
-
 from fastapi.encoders import jsonable_encoder
 
+# NOTE: Do NOT redefine app later. We keep a single FastAPI instance.
 app = _fastapi.FastAPI()
 
 LAST_EMP_ID: str | None = None
@@ -344,3 +344,202 @@ async def agent_router(
 
     # Unknown phase
     raise HTTPException(status_code=400, detail="phase must be one of: extract | validate | full")
+
+
+
+
+# ------------------------------------Prateek's API ---------------
+# IMPORTANT: Reuse the SAME app instance above. Do NOT reassign `app = FastAPI(...)`.
+from fastapi.middleware.cors import CORSMiddleware
+import queries
+
+# Attach CORS middleware to the existing app
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.get("/meta/health")
+def health():
+    # queries.get_table_health() manages its own connection
+    db_status = queries.get_table_health()
+    return {"db_tables": db_status}
+
+@app.get("/claims/summary")
+def claims_summary():
+    summary = queries.get_claims_summary()
+    proc = queries.get_avg_processing_time_by_date()  # returns metadata; safe default
+    summary.update(proc)
+    total = summary.get("total_claims", 0) or 0
+    auto = summary.get("auto_approved", 0) or summary.get("auto_approved_count", 0) or 0
+    summary["automation_rate"] = round((auto / total) if total else 0, 4)
+    return summary
+
+@app.get("/claims/by-date")
+def claims_by_date(start_date: str | None = None, end_date: str | None = None):
+    return queries.get_claims_by_date(start_date, end_date)
+
+@app.get("/claims/automation-rate")
+def automation_rate(start_date: str | None = None, end_date: str | None = None):
+    return queries.get_automation_rate_by_date(start_date, end_date)
+
+@app.get("/claims/processing-time/by-date")
+def processing_time_by_date(start_date: str | None = None, end_date: str | None = None):
+    return queries.get_processing_time_by_date(start_date, end_date)
+
+@app.get("/claims/by-department")
+def by_department(limit: int = 20):
+    return queries.get_claims_by_department(limit)
+
+@app.get("/claims/top-employees")
+def top_employees(limit: int = 20):
+    return queries.get_top_employees(limit)
+
+# @app.get("/claims/fraud-flags")
+# def fraud_flags(limit: int = 50, offset: int = 0):
+#     return queries.get_fraud_flags(limit, offset)
+
+@app.get("/claims/duplicates")
+def duplicates(threshold: int = 2):
+    return queries.get_duplicates(threshold)
+
+@app.get("/claims/amount-distribution")
+def amount_distribution():
+    # default buckets can be adjusted
+    return queries.get_amount_distribution(buckets=[0, 100, 500, 1000, 5000, 10000])
+
+@app.get("/claims/pending/aging")
+def pending_aging():
+    return queries.get_pending_aging()
+
+@app.get("/claims/details/{claim_id}")
+def claim_details(claim_id: str):
+    data = queries.get_claim_details(claim_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="Claim not found")
+    return data
+
+
+
+# ----------------------------------db_utils --- (existing endpoints kept as-is)
+# =============================
+# DB Utils APIs (new additions)
+# =============================
+from pydantic import BaseModel
+
+class ClaimCreateBody(BaseModel):
+    payload_out: Dict[str, Any]
+    status: Any  # string like "Auto Approved" | "Pending Review" OR a dict from your validator
+
+class ValidationLogBody(BaseModel):
+    employee_id: str
+    validation_obj: Dict[str, Any]
+
+class UpdateStatusBody(BaseModel):
+    status_val: str
+    auto_approved: bool = False
+
+class ManagerDecisionBody(BaseModel):
+    decision: str  # "Approve" | "Reject"
+    comment: str = ""
+    approver_id: Optional[str] = None
+
+class FinanceDecisionBody(BaseModel):
+    decision: str  # "Approve" | "Reject"
+    comment: str = ""
+    approver_id: Optional[str] = None
+
+
+# ---- Simple lookups ----
+@app.get("/api/policies")
+def api_get_policies():
+    """Return full expense_policies table."""
+    return _db_utils.get_expense_policy()
+
+@app.get("/api/per-diem")
+def api_get_per_diem(emp_id: Optional[str] = Query(default=None)):
+    """Return per_diem_rates (emp_id optional; currently unused by query)."""
+    return _db_utils.get_per_diem_rates(emp_id)
+
+@app.get("/api/employees/{emp_id}")
+def api_get_employee(emp_id: str):
+    recs = _db_utils.get_employee_details(emp_id)
+    if not recs:
+        raise HTTPException(status_code=404, detail=f"No employee found for id '{emp_id}'")
+    return recs[0]
+
+
+# ---- Claims: read/list views ----
+@app.get("/api/claims/recent")
+def api_recent_claims(emp_id: str = Query(...), limit: int = Query(50, ge=1, le=500)):
+    """Employee self-view: recent claims."""
+    df = _db_utils.load_recent_claims(emp_id, limit)
+    try:
+        return df.to_dict(orient="records")
+    except Exception:
+        # if db_utils already returns list, just pass it through
+        return df
+
+@app.get("/api/claims/manager/pending")
+def api_manager_pending(manager_email: Optional[str] = None, manager_id: Optional[str] = None):
+    """Manager view: team claims with status Pending/Pending Review (no limit)."""
+    df = _db_utils.load_manager_team_pending_claims(manager_email, manager_id)
+    try:
+        return df.to_dict(orient="records")
+    except Exception:
+        return df
+
+@app.get("/api/claims/finance/pending")
+def api_finance_pending():
+    """Finance view: all claims routed to Finance Pending."""
+    df = _db_utils.load_finance_pending_claims()
+    try:
+        return df.to_dict(orient="records")
+    except Exception:
+        return df
+
+
+# ---- Claims: create/update ----
+@app.get("/api/claims/new-id")
+def api_generate_claim_id():
+    """Generate a new claim id (CLM-YYYYMMDD-XXXX)."""
+    return {"claim_id": _db_utils.generate_claim_id()}
+
+@app.post("/api/claims")
+def api_create_claim(body: ClaimCreateBody):
+    """
+    Insert a claim. 'status' can be a string (e.g., 'Auto Approved') or
+    the validator result dict; db_utils will normalize it internally.
+    """
+    claim_id = _db_utils.save_expense_claim(body.payload_out, body.status)
+    return {"claim_id": claim_id}
+
+@app.post("/api/claims/{claim_id}/validation-log")
+def api_log_validation(claim_id: str, body: ValidationLogBody):
+    """
+    Snapshot validator decision into expense_validation_logs.
+    """
+    wrote = _db_utils.log_validation_result(claim_id, body.employee_id, body.validation_obj)
+    return wrote
+
+@app.patch("/api/claims/{claim_id}/status")
+def api_update_claim_status(claim_id: str, body: UpdateStatusBody):
+    _db_utils.update_claim_status(claim_id, body.status_val, body.auto_approved)
+    return {"ok": True, "claim_id": claim_id, "status": body.status_val, "auto_approved": body.auto_approved}
+
+@app.post("/api/claims/{claim_id}/manager-decision")
+def api_manager_decision(claim_id: str, body: ManagerDecisionBody):
+    _db_utils.manager_update_claim_decision(
+        claim_id, body.decision, body.comment, body.approver_id or ""
+    )
+    return {"ok": True, "claim_id": claim_id, "status": "Approved" if body.decision=="Approve" else "Rejected"}
+
+@app.post("/api/claims/{claim_id}/finance-decision")
+def api_finance_decision(claim_id: str, body: FinanceDecisionBody):
+    _db_utils.finance_update_claim_decision(
+        claim_id, body.decision, body.comment, body.approver_id or ""
+    )
+    return {"ok": True, "claim_id": claim_id, "status": "Approved" if body.decision=="Approve" else "Rejected"}
