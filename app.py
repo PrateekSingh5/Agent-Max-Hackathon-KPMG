@@ -29,52 +29,53 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 # -----------------------------
 # Basic extraction endpoints
 # -----------------------------
-@app.post("/extract_image_data", response_class=JSONResponse, status_code=status.HTTP_200_OK)
-def get_image_data(
-    image_name: str = Query(..., description="Name of the image file"),
-    emp_id: str = Query(..., description="Enter Employee ID"),
-):
-    """
-    Simple passthrough to image_extraction module, stores output json for the given image.
-    Also sets LAST_EMP_ID to allow subsequent calls that need the context.
-    """
-    global LAST_EMP_ID
-    try:
-        LAST_EMP_ID = emp_id
-        img_json = ie.extract_json_from_image(image_name, emp_id)
-        ie.save_json(img_json, OUT_DIR, image_name)
-        return {"image_name": image_name, "data": img_json}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+
+# @app.post("/extract_image_data", response_class=JSONResponse, status_code=status.HTTP_200_OK)
+# def get_image_data(
+#     image_name: str = Query(..., description="Name of the image file"),
+#     emp_id: str = Query(..., description="Enter Employee ID"),
+# ):
+#     """
+#     Simple passthrough to image_extraction module, stores output json for the given image.
+#     Also sets LAST_EMP_ID to allow subsequent calls that need the context.
+#     """
+#     global LAST_EMP_ID
+#     try:
+#         LAST_EMP_ID = emp_id
+#         img_json = ie.extract_json_from_image(image_name, emp_id)
+#         ie.save_json(img_json, OUT_DIR, image_name)
+#         return {"image_name": image_name, "data": img_json}
+#     except Exception as e:
+#         raise HTTPException(status_code=400, detail=str(e))
 
 
-@app.post("/extract_pdf_data", response_class=JSONResponse, status_code=status.HTTP_200_OK)
-def get_pdf_data(
-    pdf_name: str = Query(..., description="Name of the PDF file"),
-    emp_id: str = Query(..., description="Enter Employee ID"),
-):
-    """
-    Simple passthrough to image_extraction module for PDFs, stores output json.
-    Also sets LAST_EMP_ID to allow subsequent calls that need the context.
-    """
-    global LAST_EMP_ID
-    try:
-        LAST_EMP_ID = emp_id
-        # Your ie module has extract_json_from_pdf_text; keep it as-is.
-        pdf_json = ie.extract_json_from_pdf_text(pdf_name)
-        ie.save_json(pdf_json, OUT_DIR, pdf_name)
-        return {"pdf_name": pdf_name, "data": pdf_json}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+# @app.post("/extract_pdf_data", response_class=JSONResponse, status_code=status.HTTP_200_OK)
+# def get_pdf_data(
+#     pdf_name: str = Query(..., description="Name of the PDF file"),
+#     emp_id: str = Query(..., description="Enter Employee ID"),
+# ):
+#     """
+#     Simple passthrough to image_extraction module for PDFs, stores output json.
+#     Also sets LAST_EMP_ID to allow subsequent calls that need the context.
+#     """
+#     global LAST_EMP_ID
+#     try:
+#         LAST_EMP_ID = emp_id
+#         # Your ie module has extract_json_from_pdf_text; keep it as-is.
+#         pdf_json = ie.extract_json_from_pdf_text(pdf_name)
+#         ie.save_json(pdf_json, OUT_DIR, pdf_name)
+#         return {"pdf_name": pdf_name, "data": pdf_json}
+#     except Exception as e:
+#         raise HTTPException(status_code=400, detail=str(e))
 
 
 # --- Example: any other API can reuse emp_id without new params ---
-@app.get("/whoami")
-def whoami():
-    """Return the last emp_id received"""
-    if not LAST_EMP_ID:
-        raise HTTPException(status_code=404, detail="No emp_id found. Call a route that sets it first.")
-    return {"emp_id": LAST_EMP_ID}
+# @app.get("/whoami")
+# def whoami():
+#     """Return the last emp_id received"""
+#     if not LAST_EMP_ID:
+#         raise HTTPException(status_code=404, detail="No emp_id found. Call a route that sets it first.")
+#     return {"emp_id": LAST_EMP_ID}
 
 
 @app.get("/api/employee_details")
@@ -543,3 +544,101 @@ def api_finance_decision(claim_id: str, body: FinanceDecisionBody):
         claim_id, body.decision, body.comment, body.approver_id or ""
     )
     return {"ok": True, "claim_id": claim_id, "status": "Approved" if body.decision=="Approve" else "Rejected"}
+
+
+
+
+
+
+# ---------------------------------- Utils / Email APIs (Optional)----------------------------------
+
+
+import utils as mail_utils
+from pydantic import BaseModel, Field
+from typing import Optional, Any, Tuple
+
+
+# ---------- Request Models (mirror utils.py signatures) ----------
+class SendEmailBody(BaseModel):
+    recipient_email: str = Field(..., description="Recipient email address")
+    subject: str = Field(..., description="Email subject")
+    body: str = Field(..., description="Plain text email body")
+    from_name: Optional[str] = Field(None, description="Override From display name (optional)")
+
+
+class EmployeeAckDraftBody(BaseModel):
+    claim_id: str
+    employee_name: Optional[str] = None
+    employee_id: str
+    category: str
+    amount: Any
+    currency: str
+    vendor: Optional[str] = None
+    expense_date: Optional[str] = None
+    tag: str                    # Auto Approved | Rejected | Manager Pending | Finance Pending | Pending
+    decision: Optional[str] = None  # Approved | Reject | Send to Manager | Send to Finance Team
+    comments: Optional[str] = None
+
+
+class EmployeeUpdateDraftBody(BaseModel):
+    claim_id: str
+    employee_name: Optional[str] = None
+    employee_id: str
+    actor_role: str             # "Manager" or "Finance"
+    decision: str               # "Approve" or "Reject"
+    comment: Optional[str] = None
+
+
+# ---------- Endpoints ----------
+@app.post("/api/utils/email/send")
+def api_utils_send_email(body: SendEmailBody):
+    """
+    Send a plain-text email via SMTP using utils.send_email.
+    """
+    ok = mail_utils.send_email(
+        recipient_email=body.recipient_email,
+        subject=body.subject,
+        body=body.body,
+        from_name=body.from_name
+    )
+    if not ok:
+        # keep 200 with ok:false or raise – using 200 to avoid frontend exception floods
+        return {"ok": False, "message": "Email send failed. Check SMTP credentials/logs.", "to": body.recipient_email}
+    return {"ok": True, "to": body.recipient_email, "subject": body.subject}
+
+
+@app.post("/api/utils/draft/employee-ack")
+def api_utils_draft_employee_ack(body: EmployeeAckDraftBody):
+    """
+    Build the employee acknowledgement draft (subject, body) after upload/validation.
+    """
+    subject, content = mail_utils.draft_employee_ack_on_upload(
+        claim_id=body.claim_id,
+        employee_name=body.employee_name,
+        employee_id=body.employee_id,
+        category=body.category,
+        amount=body.amount,
+        currency=body.currency,
+        vendor=body.vendor,
+        expense_date=body.expense_date,
+        tag=body.tag,
+        decision=body.decision,
+        comments=body.comments,
+    )
+    return {"subject": subject, "body": content}
+
+
+@app.post("/api/utils/draft/employee-update")
+def api_utils_draft_employee_update(body: EmployeeUpdateDraftBody):
+    """
+    Build the employee update draft (subject, body) after Manager/Finance action.
+    """
+    subject, content = mail_utils.draft_employee_update_on_action(
+        claim_id=body.claim_id,
+        employee_name=body.employee_name,
+        employee_id=body.employee_id,
+        actor_role=body.actor_role,
+        decision=body.decision,
+        comment=body.comment,
+    )
+    return {"subject": subject, "body": content}
