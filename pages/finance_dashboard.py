@@ -10,7 +10,8 @@ import db_utils  # core DB utilities (provides engine, loaders, etc.)
 import agent as _agent  # for load_employee_by_email(...)
 import utils as mail_utils  # SMTP + email templates from utils.py
 import db_utils
-
+import importlib
+import dashboard  as _dashboard
 
 # -------------------------------------------------
 # PAGE CONFIG (must be first Streamlit call)
@@ -127,6 +128,9 @@ Dashboard, tab_review = st.tabs(["Dashboard", "Pending Claims Review"])
 
 with Dashboard:
     st.write("Dashboard")
+    importlib.reload(_dashboard)
+    _dashboard.main()
+
 
 
 # -------------------------------------------------

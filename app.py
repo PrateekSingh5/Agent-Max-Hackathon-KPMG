@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette import status
 from pathlib import Path
 from typing import List, Optional, Any, Dict
-
+from datetime import date
 import fastapi as _fastapi
 from sqlalchemy import orm as _orm
 
@@ -16,8 +16,11 @@ import os
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field
 import utils as mail_utils
+import queries
+from fastapi.encoders import jsonable_encoder
+from db import get_connection, safe_query
 
-# SINGLE FastAPI INSTANCE
+# # SINGLE FastAPI INSTANCE
 app = _fastapi.FastAPI()
 
 # Globals preserved from your previous code
@@ -279,52 +282,114 @@ async def agent_router(
 def health():
     return {"db_tables": _db_utils.get_table_health()}
 
+# @app.get("/claims/summary")
+# def claims_summary():
+#     summary = _db_utils.get_claims_summary()
+#     proc = _db_utils.get_avg_processing_time_by_date()
+#     summary.update(proc)
+
+#     total = summary.get("total_claims", 0) or 0
+#     auto = summary.get("auto_approved", 0) or 0
+#     summary["automation_rate"] = round((auto / total) if total else 0, 4)
+#     return summary
+
 @app.get("/claims/summary")
 def claims_summary():
-    summary = _db_utils.get_claims_summary()
-    proc = _db_utils.get_avg_processing_time_by_date()
+    summary = queries.get_claims_summary()
+    proc = queries.get_avg_processing_time_by_date()  # returns metadata; safe default
     summary.update(proc)
-
     total = summary.get("total_claims", 0) or 0
-    auto = summary.get("auto_approved", 0) or 0
+    auto = summary.get("auto_approved", 0) or summary.get("auto_approved_count", 0) or 0
     summary["automation_rate"] = round((auto / total) if total else 0, 4)
-    return summary
+    return JSONResponse(content=jsonable_encoder(summary))
+
 
 @app.get("/claims/by-date")
 def claims_by_date(start_date: str | None = None, end_date: str | None = None):
     return _db_utils.get_claims_by_date(start_date, end_date)
 
+# @app.get("/claims/automation-rate")
+# def automation_rate(start_date: str | None = None, end_date: str | None = None):
+#     return _db_utils.get_automation_rate_by_date(start_date, end_date)
+
 @app.get("/claims/automation-rate")
 def automation_rate(start_date: str | None = None, end_date: str | None = None):
-    return _db_utils.get_automation_rate_by_date(start_date, end_date)
+    return queries.get_automation_rate_by_date(start_date, end_date)
+
+
+
+# @app.get("/claims/processing-time/by-date")
+# def processing_time_by_date(start_date: str | None = None, end_date: str | None = None):
+#     return _db_utils.get_processing_time_by_date(start_date, end_date)
 
 @app.get("/claims/processing-time/by-date")
 def processing_time_by_date(start_date: str | None = None, end_date: str | None = None):
-    return _db_utils.get_processing_time_by_date(start_date, end_date)
+    return queries.get_processing_time_by_date(start_date, end_date)
+
+
+# @app.get("/claims/by-department")
+# def by_department(limit: int = 20):
+#     return _db_utils.get_claims_by_department(limit)
 
 @app.get("/claims/by-department")
 def by_department(limit: int = 20):
-    return _db_utils.get_claims_by_department(limit)
+    return queries.get_claims_by_department(limit)
+
+
+# @app.get("/claims/top-employees")
+# def top_employees(limit: int = 20):
+#     return _db_utils.get_top_employees(limit)
+
 
 @app.get("/claims/top-employees")
 def top_employees(limit: int = 20):
-    return _db_utils.get_top_employees(limit)
+    return queries.get_top_employees(limit)
+
+
+
+# @app.get("/claims/duplicates")
+# def duplicates(threshold: int = 2):
+#     return _db_utils.get_duplicates(threshold)
+
 
 @app.get("/claims/duplicates")
 def duplicates(threshold: int = 2):
-    return _db_utils.get_duplicates(threshold)
+    return queries.get_duplicates(threshold)
+
+
+# @app.get("/claims/amount-distribution")
+# def amount_distribution():
+#     return _db_utils.get_amount_distribution(buckets=[0, 100, 500, 1000, 5000, 10000])
+
 
 @app.get("/claims/amount-distribution")
 def amount_distribution():
-    return _db_utils.get_amount_distribution(buckets=[0, 100, 500, 1000, 5000, 10000])
+    # default buckets can be adjusted
+    return queries.get_amount_distribution(buckets=[0, 100, 500, 1000, 5000, 10000])
+
+
+
+# @app.get("/claims/pending/aging")
+# def pending_aging():
+#     return _db_utils.get_pending_aging()
+
 
 @app.get("/claims/pending/aging")
 def pending_aging():
-    return _db_utils.get_pending_aging()
+    return queries.get_pending_aging()
+
+
+# @app.get("/claims/details/{claim_id}")
+# def claim_details(claim_id: str):
+#     data = _db_utils.get_claim_details(claim_id)
+#     if not data:
+#         raise HTTPException(status_code=404, detail="Claim not found")
+#     return data
+
 
 @app.get("/claims/details/{claim_id}")
 def claim_details(claim_id: str):
-    data = _db_utils.get_claim_details(claim_id)
+    data = queries.get_claim_details(claim_id)
     if not data:
         raise HTTPException(status_code=404, detail="Claim not found")
     return data
@@ -504,3 +569,143 @@ def api_utils_draft_employee_update(body: EmployeeUpdateDraftBody):
         comment=body.comment,
     )
     return {"subject": subject, "body": content}
+
+
+def sql_read(query, params=None):
+    with get_connection() as conn:
+        return safe_query(conn, query, params)
+
+@app.get("/claims/summary")
+def get_summary():
+    sql = """
+        SELECT 
+            COUNT(*) AS total_claims,
+            SUM(amount) AS total_amount,
+            SUM(CASE WHEN status = 'Approved' THEN 1 ELSE 0 END) AS approved,
+            SUM(CASE WHEN status = 'Rejected' THEN 1 ELSE 0 END) AS rejected,
+            SUM(CASE WHEN fraud_flag THEN 1 ELSE 0 END) AS frauds,
+            SUM(CASE WHEN auto_approved THEN 1 ELSE 0 END) AS auto_approved,
+            SUM(CASE WHEN is_duplicate THEN 1 ELSE 0 END) AS duplicates
+        FROM expense_claims;
+    """
+    return JSONResponse(content=sql_read(sql))
+
+@app.get("/claims/trends")
+def get_trends(start_date: date, end_date: date):
+    sql = """
+        SELECT 
+            DATE_TRUNC('month', claim_date)::date AS month,
+            SUM(amount) AS total_amount,
+            COUNT(*) AS claim_count
+        FROM expense_claims
+        WHERE claim_date BETWEEN %s AND %s
+        GROUP BY 1
+        ORDER BY 1;
+    """
+    return JSONResponse(content=sql_read(sql, (start_date, end_date)))
+
+@app.get("/vendors/top")
+def get_top_vendors(start_date: date, end_date: date, limit: int = 10):
+    sql = """
+        SELECT vendor_name, SUM(amount) AS total_spend
+        FROM expense_claims
+        WHERE claim_date BETWEEN %s AND %s
+        GROUP BY vendor_name
+        ORDER BY total_spend DESC
+        LIMIT %s;
+    """
+    return JSONResponse(content=sql_read(sql, (start_date, end_date, limit)))
+
+@app.get("/expenses/by-category")
+def get_category_expenses(start_date: date, end_date: date):
+    sql = """
+        SELECT expense_category, SUM(amount) AS total_spend
+        FROM expense_claims
+        WHERE claim_date BETWEEN %s AND %s
+        GROUP BY expense_category
+        ORDER BY total_spend DESC;
+    """
+    return JSONResponse(content=sql_read(sql, (start_date, end_date)))
+
+@app.get("/expenses/policy-compliance")
+def get_policy_compliance():
+    sql = """
+        SELECT 
+            p.policy_name,
+            COUNT(DISTINCT c.claim_id) AS total_claims,
+            SUM(CASE WHEN c.amount > p.max_limit THEN 1 ELSE 0 END) AS violations,
+            SUM(CASE WHEN c.amount > p.max_limit THEN c.amount - p.max_limit ELSE 0 END) AS total_excess
+        FROM expense_claims c
+        JOIN expense_policies p ON c.expense_category = p.expense_type
+        GROUP BY p.policy_name
+        ORDER BY violations DESC;
+    """
+    return JSONResponse(content=sql_read(sql))
+
+
+@app.get("/employees/leaderboard")
+def get_employee_leaderboard(start_date: date, end_date: date):
+    sql = """
+        SELECT 
+            e.employee_name, 
+            SUM(c.amount) AS total_spent,
+            COUNT(c.claim_id) AS claim_count
+        FROM expense_claims c
+        JOIN employees e ON c.employee_id = e.employee_id
+        WHERE c.claim_date BETWEEN %s AND %s
+        GROUP BY e.employee_name
+        ORDER BY total_spent DESC
+        LIMIT 10;
+    """
+    return JSONResponse(content=sql_read(sql, (start_date, end_date)))
+
+
+@app.get("/claims/monthly_trend")
+def get_trend(start_date: date, end_date: date):
+    data = queries.get_monthly_trend(start_date, end_date)
+    return JSONResponse(content=jsonable_encoder(data))
+
+
+@app.get("/claims/top_vendors")
+def get_top_vendors(start_date: date, end_date: date, limit: int = 10):
+    data = queries.get_top_vendors(start_date, end_date, limit)
+    return JSONResponse(content=data)
+
+@app.get("/claims/fraud")
+def get_fraud(start_date: date, end_date: date):
+    data = queries.get_fraud_claims(start_date, end_date)
+    return JSONResponse(content=data)
+
+
+
+@app.get("/claims/pending")
+def get_pending(start_date: date, end_date: date):
+    data = queries.get_pending_claims(start_date, end_date)
+    # Either return plain data (FastAPI auto-encodes) ...
+    # return data
+
+    # ...or keep JSONResponse but encode properly:
+    return JSONResponse(content=jsonable_encoder(data))
+
+
+
+@app.get("/claims/list")
+def get_claims_list(
+    start_date: date,
+    end_date: date,
+    status: str | None = None,
+    employee_id: str | None = None,
+    limit: int = 500,
+):
+    data = queries.get_claims_list(start_date, end_date, status, employee_id, limit)
+    # Either return the plain object (FastAPI will encode) ...
+    # return data
+
+    # ...or keep JSONResponse but wrap with jsonable_encoder:
+    return JSONResponse(content=jsonable_encoder(data))
+
+
+@app.get("/claims/policy_compliance")
+def get_policy_compliance():
+    data = queries.get_policy_compliance()
+    return JSONResponse(content=data)
