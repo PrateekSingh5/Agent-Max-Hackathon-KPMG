@@ -204,24 +204,71 @@ def get_auto_approved_count() -> Dict[str, int]:
 
 def get_claims_by_date(start_date: str | None, end_date: str | None) -> Dict[str, List[Dict[str, Any]]]:
     """
-    Returns daily totals within an optional date range.
+    Returns daily totals within an optional date range,
+    including automation, fraud, pending, and processing metrics.
+    Safe for missing or invalid date filters.
     """
     where_sql, params = _date_filter_sql(start_date, end_date)
-    with get_connection() as conn:
-        rows = safe_query(conn, f"""
-            SELECT
-                claim_date::date AS dt,
-                COUNT(*) AS total_claims,
-                COALESCE(SUM(amount)::float, 0) AS total_amount
-            FROM expense_claims
-            {where_sql}
-            GROUP BY dt
-            ORDER BY dt
-        """, params)
-        for r in rows:
-            r["total_claims"] = int(r["total_claims"] or 0)
-            r["total_amount"] = float(r["total_amount"] or 0.0)
-        return {"by_date": rows}
+
+    # Safety: Ensure params is always a list or tuple, even if None
+    if not isinstance(params, (list, tuple)):
+        params = []
+
+    try:
+        with get_connection() as conn:
+            sql = f"""
+                SELECT
+                    claim_date::date AS dt,
+                    COUNT(*) AS total_claims,
+                    COALESCE(SUM(amount)::float, 0) AS total_amount,
+                    SUM(CASE WHEN auto_approved = TRUE THEN 1 ELSE 0 END) AS auto_approved_count,
+                    SUM(CASE WHEN fraud_flag = TRUE THEN 1 ELSE 0 END) AS fraud_flags_detected,
+                    SUM(CASE WHEN status ILIKE 'Pending%' THEN 1 ELSE 0 END) AS pending_claims
+                FROM expense_claims
+                {where_sql}
+                GROUP BY dt
+                ORDER BY dt
+            """
+
+            rows = safe_query(conn, sql, params)
+
+            # Defensive: If rows is None or invalid
+            if not rows:
+                return {"by_date": []}
+
+            # Compute derived metrics
+            for r in rows:
+                total = int(r.get("total_claims", 0) or 0)
+                auto = int(r.get("auto_approved_count", 0) or 0)
+                r["automation_rate"] = round((auto / total) if total else 0.0, 4)
+                r["avg_processing_time_hours"] = None  # Placeholder until timestamps exist
+                r["total_claims"] = total
+                r["total_amount"] = float(r["total_amount"] or 0.0)
+                r["auto_approved_count"] = auto
+                r["fraud_flags_detected"] = int(r.get("fraud_flags_detected", 0) or 0)
+                r["pending_claims"] = int(r.get("pending_claims", 0) or 0)
+
+            return {"by_date": rows}
+
+    except Exception as e:
+        print(f"❌ get_claims_by_date error: {e}")
+        return {"by_date": []}
+
+def _date_filter_sql(start_date: str | None, end_date: str | None):
+    """
+    Builds safe SQL WHERE clause for optional date filtering.
+    Always returns (where_clause, params).
+    """
+    if start_date and end_date:
+        return "WHERE claim_date >= %s AND claim_date <= %s", [start_date, end_date]
+    elif start_date:
+        return "WHERE claim_date >= %s", [start_date]
+    elif end_date:
+        return "WHERE claim_date <= %s", [end_date]
+    else:
+        return "", []
+
+
 
 
 def get_automation_rate_by_date(start_date: str | None, end_date: str | None) -> Dict[str, List[Dict[str, Any]]]:
