@@ -1,20 +1,4 @@
 # queries.py
-from typing import Dict, List, Any, Optional, Tuple
-from db import get_connection, safe_query, close_connection_pool
-
-# ------------------------------------------------------------------
-# Helpers
-# ------------------------------------------------------------------
-# def _fetchval(conn, sql: str, params: tuple | list | None = None, key: str = "val"):
-#     """
-#     Execute a SELECT returning a single scalar value.
-#     Returns None if no rows.
-#     """
-#     rows = safe_query(conn, f"SELECT ({sql}) AS {key}", params)
-#     if rows and key in rows[0]:
-#         return rows[0][key]
-#     return None
-
 
 from typing import Dict, List, Any, Optional, Tuple
 import re
@@ -186,19 +170,30 @@ def get_table_health() -> Dict[str, bool]:
 def get_claims_summary() -> Dict[str, Any]:
     """
     Consolidated KPI summary for /claims/summary.
+    Gracefully handles missing tables or partial failures.
     """
     out: Dict[str, Any] = {}
-    out.update(get_total_claims())
-    out.update(get_total_amount())
-    out.update(get_fraud_stats())
-    out.update(get_auto_approved_count())  # helper below
-    out.update(get_auto_approved_rate())
-    out.update(get_claims_by_category())
 
-    # include top vendors and (optionally) avg amounts
-    out.update(get_top_vendors(limit=10))
-    out.update(get_avg_amount_per_employee(limit=10))
+    # Safe execution wrapper
+    def safe_call(func, default: Dict[str, Any]):
+        try:
+            return func()
+        except Exception as e:
+            print(f"[WARN] {func.__name__} failed: {e}")
+            return default
+
+    # Collect metrics safely
+    out.update(safe_call(get_total_claims, {"total_claims": 0}))
+    out.update(safe_call(get_total_amount, {"total_amount": 0.0}))
+    out.update(safe_call(get_fraud_stats, {"fraud_count": 0, "fraud_percent": 0.0}))
+    out.update(safe_call(get_auto_approved_count, {"auto_approved": 0}))
+    out.update(safe_call(get_auto_approved_rate, {"auto_approved_rate": 0.0}))
+    out.update(safe_call(get_claims_by_category, {"claims_by_category": []}))
+    out.update(safe_call(lambda: get_top_vendors(limit=10), {"top_vendors": []}))
+    out.update(safe_call(lambda: get_avg_amount_per_employee(limit=10), {"avg_claim_amounts": []}))
+
     return out
+
 
 
 def get_auto_approved_count() -> Dict[str, int]:
