@@ -7,7 +7,6 @@ from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 import traceback
 
-
 # -----------------------------
 # Config: env / Streamlit / fallback to provided creds
 # -----------------------------
