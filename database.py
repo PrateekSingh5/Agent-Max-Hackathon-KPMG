@@ -1,24 +1,38 @@
-import sqlalchemy as _sql
-import sqlalchemy.ext.declarative as _declarative
-from  sqlalchemy import orm as _orm
+
+# database.py
+import os
 from dotenv import load_dotenv
-import os 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import declarative_base, sessionmaker, Session
 
-DB_USER = os.getenv("DB_USER")
-DB_PASS = os.getenv("DB_PASS")  # URL-encode special chars like '@'
-DB_HOST = os.getenv("DB_HOST")
-DB_PORT = os.getenv("DB_PORT")
-DB_NAME = os.getenv("DB_NAME")
+load_dotenv()
 
-DATABASE_URL = "postgresql://myuser:rootpassword@localhost:5432/agent_max"
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql+psycopg2://myuser:rootpassword@localhost:5432/agent_max",
+)
 
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,
+    pool_recycle=1800,
+    pool_size=int(os.getenv("DB_POOL_SIZE", "5")),
+    max_overflow=int(os.getenv("DB_MAX_OVERFLOW", "10")),
+    future=True,
+)
 
-# DATABASE_URL = f"postgresql+asyncpg://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+SessionLocal: sessionmaker[Session] = sessionmaker(
+    bind=engine,
+    autocommit=False,
+    autoflush=False,
+    expire_on_commit=False,
+    future=True,
+)
 
-engine = _sql.create_engine(DATABASE_URL)
+Base = declarative_base()
 
-SessionLocal = _orm.sessionmaker(autocommit=False, autoflush=False, bind=engine)
+def get_engine():
+    return engine
 
-Base = _declarative.declarative_base()
-
- 
+def get_db_session() -> Session:
+    return SessionLocal()

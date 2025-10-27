@@ -17,6 +17,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
 
 # external DB helper expected in PYTHONPATH
+# from  db_utils import load_policies_df, load_employee_by_email 
 import db_utils
 
 # =========================================================
@@ -32,12 +33,13 @@ llm_json = ChatOpenAI(
     api_key=OPENAI_API_KEY,
 ).bind(response_format={"type": "json_object"})
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql://myuser:rootpassword@localhost:5432/agent_max"
-)
-engine = create_engine(DATABASE_URL, future=True)
+# DATABASE_URL = os.getenv(
+#     "DATABASE_URL",
+#     "postgresql://myuser:rootpassword@localhost:5432/agent_max"
+# )
+# engine = create_engine(DATABASE_URL, future=True)
 
+# engine  = db_utils.engine
 # =========================================================
 # CONSTANTS / REGEX
 # =========================================================
@@ -172,11 +174,11 @@ INSTRUCTIONS_VALIDATION = (
 # =========================================================
 # UTILITIES
 # =========================================================
-def load_employee_by_email(email: str) -> Optional[Dict[str, Any]]:
-    query = text("SELECT * FROM employees WHERE email = :email;")
-    with engine.connect() as conn:
-        result = conn.execute(query, {"email": email}).mappings().first()
-        return dict(result) if result else None
+# def load_employee_by_email(email: str) -> Optional[Dict[str, Any]]:
+#     query = text("SELECT * FROM employees WHERE email = :email;")
+#     with engine.connect() as conn:
+#         result = conn.execute(query, {"email": email}).mappings().first()
+#         return dict(result) if result else None
 
 def image_to_data_url(path: str) -> str:
     ext = Path(path).suffix.lower().lstrip(".")
@@ -757,15 +759,15 @@ def _extract_payload_dict_from_state_extraction(extraction_section: Any) -> Dict
             return extraction_section.payload
     return {}
 
-def load_policies_df(grade: str) -> pd.DataFrame:
-    query = text("""
-        SELECT *
-        FROM expense_policies
-        WHERE applicable_grades ILIKE :pattern
-        ORDER BY category ASC, max_allowance DESC
-    """)
-    with engine.connect() as conn:
-        return pd.read_sql(query, conn, params={"pattern": f"%{grade}%"})
+# def load_policies_df(grade: str) -> pd.DataFrame:
+#     query = text("""
+#         SELECT *
+#         FROM expense_policies
+#         WHERE applicable_grades ILIKE :pattern
+#         ORDER BY category ASC, max_allowance DESC
+#     """)
+#     with engine.connect() as conn:
+#         return pd.read_sql(query, conn, params={"pattern": f"%{grade}%"})
 
 def _pick_policy_for(
     employee_details_list: List[Dict[str, Any]],
@@ -805,7 +807,7 @@ def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
     employee_row = employee_details_list[0] if employee_details_list else None
 
     emp_grade = employee_row.get("grade") if employee_row else None
-    policies_df = load_policies_df(emp_grade) if emp_grade else pd.DataFrame()
+    policies_df = db_utils.load_policies_df(emp_grade) if emp_grade else pd.DataFrame()
     policies_list = policies_df.to_dict("records")
     policy_row = _pick_policy_for(employee_details_list, policies_list, payload_dict.get("category"))
 

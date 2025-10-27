@@ -1,43 +1,16 @@
-import os
-from typing import Optional, Dict, Any, List
+
 
 import streamlit as st
-from sqlalchemy import create_engine, text
-from sqlalchemy.engine import Engine
+from typing import Optional, Dict, Any, List
+
+# we no longer manage engine here
+import db_utils  # <- this is your shared DB layer
 
 # -------------------------------------------------
 # CONFIG
 # -------------------------------------------------
 st.set_page_config(page_title="Company Login", layout="centered")
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql://myuser:rootpassword@localhost:5432/agent_max"
-)
-
-# -------------------------------------------------
-# DB LAYER
-# -------------------------------------------------
-@st.cache_resource(show_spinner=False)
-def get_engine() -> Engine:
-    return create_engine(DATABASE_URL, future=True)
-
-def fetch_user_by_email(email: str) -> Optional[Dict[str, Any]]:
-    """
-    Returns {email, access_label} for that user or None.
-    """
-    engine = get_engine()
-    q = text("""
-        SELECT 
-            email,
-            access_label
-        FROM employees
-        WHERE LOWER(email) = LOWER(:email)
-        LIMIT 1
-    """)
-    with engine.connect() as conn:
-        row = conn.execute(q, {"email": email.strip()}).mappings().first()
-        return dict(row) if row else None
 
 # -------------------------------------------------
 # AUTH HELPERS
@@ -71,6 +44,7 @@ def allowed_views_for_user(user: Dict[str, Any]) -> List[str]:
         views.append("Finance")
     return views
 
+
 # -------------------------------------------------
 # SESSION STATE
 # -------------------------------------------------
@@ -97,6 +71,7 @@ def logout():
     st.session_state.access_label = None
     st.session_state.allowed_views = []
 
+
 # -------------------------------------------------
 # LOGIN FORMS
 # -------------------------------------------------
@@ -111,6 +86,7 @@ def login_form(form_key: str, portal_label: str):
         pwd = st.text_input("Password", type="password", key=form_key + "_pwd")
         submit = st.form_submit_button("Login")
     return email, pwd, submit
+
 
 def complete_login_and_redirect(user: Dict[str, Any]):
     """
@@ -132,6 +108,7 @@ def complete_login_and_redirect(user: Dict[str, Any]):
     else:
         st.error("You logged in but you have no dashboard permission.")
 
+
 def process_login_attempt(email: str, pwd: str, portal_type: str):
     """
     portal_type: "emp" | "mgr" | "fin"
@@ -141,7 +118,7 @@ def process_login_attempt(email: str, pwd: str, portal_type: str):
     - portal access
     Then redirect.
     """
-    user = fetch_user_by_email(email)
+    user = db_utils.fetch_user_by_email(email)  # <--- now using db_utils
     if user is None:
         st.error("User not found")
         return
@@ -165,6 +142,7 @@ def process_login_attempt(email: str, pwd: str, portal_type: str):
     # good login
     complete_login_and_redirect(user)
 
+
 # -------------------------------------------------
 # WHEN LOGGED OUT: SHOW 3 TABS
 # -------------------------------------------------
@@ -185,6 +163,7 @@ def render_logged_out_tabs():
         email, pwd, submit = login_form("fin", "Finance")
         if submit:
             process_login_attempt(email, pwd, "fin")
+
 
 # -------------------------------------------------
 # MAIN
@@ -211,6 +190,7 @@ def main():
     else:
         st.info("Please log in:")
         render_logged_out_tabs()
+
 
 if __name__ == "__main__":
     main()

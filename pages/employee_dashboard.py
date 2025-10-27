@@ -1,3 +1,5 @@
+
+# # employee_dashboard.py
 # import os
 # import re
 # import json
@@ -6,56 +8,26 @@
 # from datetime import date, datetime
 # import requests
 # import pandas as pd
-# from sqlalchemy import create_engine, text
 # import streamlit as st
-# import agent as _agent  # must expose run_validation_agent(...)
 
-# from db_utils import save_expense_claim, log_validation_result
-
-# from claims_dashboard import load_recent_claims
-
+# import agent as _agent
+# import db_utils
+# from db_utils import save_expense_claim, log_validation_result, load_recent_claims
 # import utils as mail_utils
-# import db_utils  
-# # -------------------------------------------------
-# # PAGE CONFIG (must be first Streamlit call)
-# # -------------------------------------------------
+
 # st.set_page_config(page_title="Employee Dashboard", layout="wide")
 
-# # -------------------------------------------------
-# # CONSTANTS
-# # -------------------------------------------------
 # BASE_API = "http://localhost:8000"
 # AGENT_ENDPOINT = f"{BASE_API}/api/Agent"
-
 # OUTPUT_DIR = "output/langchain_json"
 # Path(OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
 
 # input_dir = Path("./input/images")
 # input_dir.mkdir(parents=True, exist_ok=True)
 
+# RECIPIENT_OVERRIDE = "kumar.vipin.official@gmail.com"
 
-
-# # Email helper function
-
-# def _resolve_employee_email(emp_id: str, payload_out: dict) -> str | None:
-#     # prefer the form’s buyer.email if present
-#     buyer_email = deep_get(payload_out, "buyer.email")
-#     if buyer_email:
-#         return buyer_email
-
-#     try:
-#         rows = db_utils.get_employee_details(emp_id)
-#         if rows:
-#             rec = rows[0] if isinstance(rows, list) else rows
-#             return rec.get("email")
-#     except Exception:
-#         pass
-#     return None
-
-
-# # -------------------------------------------------
-# # SESSION ENFORCERS AND NAV HELPERS
-# # -------------------------------------------------
+# # -------- session/nav helpers (unchanged) --------
 # def do_logout_and_return():
 #     st.session_state.logged_in = False
 #     st.session_state.email = None
@@ -70,27 +42,19 @@
 #     st.switch_page("pages/finance_dashboard.py")
 
 # def ensure_employee_allowed():
-#     """
-#     Must be logged in AND have access_label in {"E","M"}.
-#     Otherwise redirect or stop.
-#     """
 #     if not st.session_state.get("logged_in", False):
 #         st.error("Please login first.")
 #         if st.button("Go to Login"):
 #             st.switch_page("portal_login.py")
 #         st.stop()
-
 #     access_label = st.session_state.get("access_label", "")
 #     if access_label not in {"E", "M"}:
 #         st.error("Access denied. Employee portal only.")
 #         st.sidebar.button("Logout", on_click=do_logout_and_return)
 #         st.stop()
 
-# # -------------------------------------------------
-# # SMALL HELPERS
-# # -------------------------------------------------
+# # -------- misc helpers (unchanged) --------
 # def parse_iso_date(s: str) -> date:
-#     """Parse YYYY-MM-DD; fallback to today on error."""
 #     try:
 #         return datetime.strptime(s, "%Y-%m-%d").date()
 #     except Exception:
@@ -100,11 +64,10 @@
 #     if d is None:
 #         return None
 #     if isinstance(d, str):
-#         return d  # assume already ISO
+#         return d
 #     return d.isoformat()
 
 # def deep_get(d, path, default=None):
-#     """Safely get a nested key by dotted path."""
 #     cur = d or {}
 #     for part in path.split('.'):
 #         if not isinstance(cur, dict) or part not in cur:
@@ -112,20 +75,16 @@
 #         cur = cur[part]
 #     return cur
 
-# # -------------------------------------------------
-# # CLAIMS DASHBOARD (for this employee only)
-# # -------------------------------------------------
+# # -------- claims table --------
 # def show_claims_dashboard():
 #     st.caption("Showing your most recent claims")
-
 #     employee_id = st.session_state.get("emp_id")
 #     if not employee_id:
 #         st.warning("⚠️ Missing employee_id in session.")
 #         return
-
 #     try:
 #         df = load_recent_claims(employee_id, 50)
-#         if df.empty:
+#         if df is None or df.empty:
 #             st.info("You have not submitted any claims yet.")
 #         else:
 #             st.dataframe(
@@ -146,10 +105,150 @@
 #     except Exception as e:
 #         st.error(f"Failed to load claims: {e}")
 
+# # -------- dynamic forms (unchanged content) --------
+# # (keep your render_form_* functions exactly as in your current file)
+
+# # ----------------------------
+
+
+# # employee_dashboard.py
+# import os
+# import re
+# import json
+# import time
+# from pathlib import Path
+# from datetime import date, datetime
+# import requests
+# import pandas as pd
+# import streamlit as st
+
+# import agent as _agent
+# import db_utils
+# from db_utils import save_expense_claim, log_validation_result, load_recent_claims
+# import utils as mail_utils
+
+# st.set_page_config(page_title="Employee Dashboard", layout="wide")
+
+# BASE_API = "http://localhost:8000"
+# AGENT_ENDPOINT = f"{BASE_API}/api/Agent"
+# OUTPUT_DIR = "output/langchain_json"
+# Path(OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
+
+# input_dir = Path("./input/images")
+# input_dir.mkdir(parents=True, exist_ok=True)
+
+# RECIPIENT_OVERRIDE = "kumar.vipin.official@gmail.com"
+
+# # -------- session/nav helpers (unchanged) --------
+# def do_logout_and_return():
+#     st.session_state.logged_in = False
+#     st.session_state.email = None
+#     st.session_state.access_label = None
+#     st.session_state.allowed_views = []
+#     st.switch_page("portal_login.py")
+
+# def go_manager():
+#     st.switch_page("pages/manager_dashboard.py")
+
+# def go_finance():
+#     st.switch_page("pages/finance_dashboard.py")
+
+# def ensure_employee_allowed():
+#     if not st.session_state.get("logged_in", False):
+#         st.error("Please login first.")
+#         if st.button("Go to Login"):
+#             st.switch_page("portal_login.py")
+#         st.stop()
+#     access_label = st.session_state.get("access_label", "")
+#     if access_label not in {"E", "M"}:
+#         st.error("Access denied. Employee portal only.")
+#         st.sidebar.button("Logout", on_click=do_logout_and_return)
+#         st.stop()
+
+# # -------- misc helpers (unchanged) --------
+# def parse_iso_date(s: str) -> date:
+#     try:
+#         return datetime.strptime(s, "%Y-%m-%d").date()
+#     except Exception:
+#         return date.today()
+
+# def to_iso(d: date | str | None) -> str | None:
+#     if d is None:
+#         return None
+#     if isinstance(d, str):
+#         return d
+#     return d.isoformat()
+
+# def deep_get(d, path, default=None):
+#     cur = d or {}
+#     for part in path.split('.'):
+#         if not isinstance(cur, dict) or part not in cur:
+#             return default
+#         cur = cur[part]
+#     return cur
+
+# # -------- claims table --------
+# def show_claims_dashboard():
+#     st.caption("Showing your most recent claims")
+#     employee_id = st.session_state.get("emp_id")
+#     if not employee_id:
+#         st.warning("⚠️ Missing employee_id in session.")
+#         return
+#     try:
+#         df = load_recent_claims(employee_id, 50)
+#         if df is None or df.empty:
+#             st.info("You have not submitted any claims yet.")
+#         else:
+#             st.dataframe(
+#                 df,
+#                 use_container_width=True,
+#                 hide_index=True,
+#                 column_config={
+#                     "claim_id": "Claim ID",
+#                     "user_name": "Employee Name",
+#                     "claim_type": "Claim Type",
+#                     "amount": st.column_config.NumberColumn(format="₹ %.2f"),
+#                     "currency": "Currency",
+#                     "status": "Status",
+#                     "vendor_name": "Vendor",
+#                     "claim_date": st.column_config.DatetimeColumn(format="YYYY-MM-DD"),
+#                 },
+#             )
+#     except Exception as e:
+#         st.error(f"Failed to load claims: {e}")
+
+# # -------- dynamic forms (unchanged content) --------
+# # (keep your render_form_* functions exactly as in your current file)
+
+
+
+# def render_dynamic_form(payload, emp_id):
+#     """
+#     Pick which form to render based on payload['category'].
+#     Returns a normalized payload_out dict if the user clicked Submit,
+#     else None.
+#     """
+#     cat = (payload.get("category") or "").strip().lower()
+#     if cat == "hotel":
+#         return render_form_hotel(payload, emp_id)
+#     elif cat == "travel":
+#         return render_form_travel(payload, emp_id)
+#     elif cat == "food":
+#         return render_form_food(payload, emp_id)
+#     elif cat in ["local", "local_conveyance", "local conveyance", "local_convey"]:
+#         return render_form_local_conv(payload, emp_id)
+#     else:
+#         # default "other"
+#         return render_form_other(payload, emp_id)
+
+
+
+# # ----------------
+
+
 # # -------------------------------------------------
 # # CATEGORY-SPECIFIC FORMS
 # # -------------------------------------------------
-
 # def render_form_hotel(payload, emp_id):
 #     with st.form(key="invoice_form_hotel", clear_on_submit=False):
 #         st.write("**Hotel Invoice / Stay Details**")
@@ -269,17 +368,6 @@
 
 
 # def render_form_travel(payload, emp_id):
-#     # Assumed travel schema
-#     # e.g. {
-#     #   "from_city": "...",
-#     #   "to_city": "...",
-#     #   "travel_mode": "flight/train/cab",
-#     #   "travel_date": "2025-01-02",
-#     #   "ticket_amount": 1234.5,
-#     #   "currency": "INR",
-#     #   "vendor": "IndiGo",
-#     #   ...
-#     # }
 #     with st.form(key="invoice_form_travel", clear_on_submit=False):
 #         st.write("**Travel Claim Details**")
 
@@ -345,15 +433,6 @@
 
 
 # def render_form_food(payload, emp_id):
-#     # Assume food schema:
-#     # {
-#     #   "restaurant": "...",
-#     #   "meal_date": "2025-01-04",
-#     #   "total_amount": 560.0,
-#     #   "currency": "INR",
-#     #   "attendees": ["...","..."],
-#     #   ...
-#     # }
 #     with st.form(key="invoice_form_food", clear_on_submit=False):
 #         st.write("**Food / Meal Claim Details**")
 
@@ -408,15 +487,6 @@
 
 
 # def render_form_local_conv(payload, emp_id):
-#     # Assume local conveyance schema:
-#     # {
-#     #   "city": "Bangalore",
-#     #   "ride_date": "2025-01-05",
-#     #   "distance_km": 14.2,
-#     #   "fare_amount": 320,
-#     #   "currency": "INR",
-#     #   "vendor": "Uber",
-#     # }
 #     with st.form(key="invoice_form_local", clear_on_submit=False):
 #         st.write("🚕 Local Conveyance / Taxi / Auto")
 
@@ -476,7 +546,6 @@
 
 
 # def render_form_other(payload, emp_id):
-#     # Generic fallback
 #     with st.form(key="invoice_form_other", clear_on_submit=False):
 #         st.write("Other / Misc Expense")
 
@@ -546,22 +615,11 @@
 #         # default "other"
 #         return render_form_other(payload, emp_id)
 
-# # -------------------------------------------------
-# # EXTRACTOR NODE UI
-# # -------------------------------------------------
+
+
+
+# # -------- extractor UI (only change is log_validation_result input) --------
 # def extractor_node_ui(emp_id: str, output_dir: str, input_dir: Path):
-#     """
-#     Flow:
-#     1. Upload file
-#     2. Click Review -> call /api/Agent?image_name=...&emp_id=...
-#        body: { phase:"extract", json_out_dir, save_json_file }
-#     3. We store extraction payload in session.
-#     4. We render a category-specific form.
-#     5. On submit of that form:
-#        - save_expense_claim(payload_out)
-#        - keep payload_out as last_payload for validation
-#     6. User can click "Submit & Validate" -> /api/Agent?phase=validate
-#     """
 #     uploaded_file = st.file_uploader(
 #         "Upload invoice/receipt (PNG/JPG/JPEG/WEBP/PDF)",
 #         type=["png", "jpg", "jpeg", "webp", "pdf"],
@@ -575,7 +633,6 @@
 #     with c2:
 #         reset_clicked = st.button("Reset", use_container_width=True, key="reset_extractor_btn")
 
-#     # Reset flow
 #     if reset_clicked:
 #         st.session_state.ui_step = "idle"
 #         st.session_state.extraction_resp = None
@@ -585,7 +642,6 @@
 #         st.success("Extractor state cleared.")
 #         return
 
-#     # Run extraction
 #     if run_clicked:
 #         if not emp_id:
 #             st.warning("Please log in again: no emp_id in session.")
@@ -594,50 +650,34 @@
 #             st.warning("Please upload an image/PDF file first.")
 #             return
 
-#         # save uploaded file locally
 #         safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", uploaded_file.name)
 #         file_path = input_dir / safe_name
 #         with open(file_path, "wb") as f:
 #             f.write(uploaded_file.getbuffer())
 
 #         try:
-#             # IMPORTANT: fix 422 by passing required query params separately
-#             params = {
-#                 "image_name": str(file_path),
-#                 "emp_id": emp_id,
-#             }
-#             body = {
-#                 "phase": "extract",
-#                 "json_out_dir": output_dir,
-#                 "save_json_file": True,
-#             }
-
+#             params = {"image_name": str(file_path), "emp_id": emp_id}
+#             body = {"phase": "extract", "json_out_dir": output_dir, "save_json_file": True}
 #             r = requests.post(AGENT_ENDPOINT, params=params, json=body, timeout=120)
 #             if r.status_code != 200:
 #                 st.error(f"API error {r.status_code}: {r.text}")
 #                 return
-
 #             resp = r.json() or {}
 #             payload = deep_get(resp, "extraction.payload", {}) or {}
-
 #             st.session_state.uploaded_image_path = str(file_path)
 #             st.session_state.extraction_resp = resp
 #             st.session_state.extracted_payload = payload
 #             st.session_state.ui_step = "form"
-
 #             st.success("Extraction complete ✅")
 #             st.write("**Saved at:**", str(file_path))
-
 #         except requests.exceptions.RequestException as e:
 #             st.error(f"Connection error: {e}")
 #             return
 
-#     # If we're not in 'form' mode yet, stop here
 #     if st.session_state.ui_step != "form":
 #         st.info("Upload a file and click **Click to Review** to continue.")
 #         return
 
-#     # Render payload / raw preview
 #     payload = st.session_state.extracted_payload or {}
 #     if not isinstance(payload, dict) or not payload:
 #         st.warning("No payload returned from API.")
@@ -649,82 +689,74 @@
 #     with st.expander("Raw extraction payload"):
 #         st.json(payload)
 
-#     # --- Dynamic category form ---
 #     payload_out = render_dynamic_form(payload, emp_id)
+#     if payload_out is None:
+#         return
 
+#     # validate
+#     try:
+#         r = requests.post(AGENT_ENDPOINT, params={"phase": "validate"}, json=payload_out, timeout=120)
+#         r.raise_for_status()
+#         validation_json = r.json() or {}
+#     except requests.exceptions.RequestException as e:
+#         validation_json = {"status": "ValidationError", "auto_approved": False, "error_msg": str(e)}
 
-#     if payload_out is not None:
-#         # user clicked Submit inside the category form
-#         st.session_state.ui_step = "form"
+#     # save claim
+#     try:
+#         tag_status = validation_json.get('tag', 'Pending')
+#         claim_id = save_expense_claim(payload_out, tag_status)
+#         st.success(f"✅ Expense Claim saved successfully! Claim ID: **{claim_id}**")
+#     except Exception as e:
+#         st.error(f"❌ Database insert failed: {e}")
+#         st.stop()
 
-    
+#     # log validation (PASS THE DICT!)
+#     try:
+#         _ = log_validation_result(
+#             claim_id=claim_id,
+#             employee_id=payload_out.get("employee_id") or emp_id,
+#             validation_obj=validation_json,  # ← fixed
+#         )
+#     except Exception as log_ex:
+#         st.warning(f"Validation log failed: {log_ex}")
 
-#         # --- If you prefer to keep the FastAPI call instead of _agent.run_validation_agent, use this:
-#         try:
-#             r = requests.post(
-#                 AGENT_ENDPOINT,
-#                 params={"phase": "validate"},
-#                 json=payload_out,
-#                 timeout=120
-#             )
-#             r.raise_for_status()
-#             validation_json = r.json() or {}
-#             st.write("Validation Payload")
-#             st.json(validation_json)
-#         except requests.exceptions.RequestException as e:
-#             validation_json = {
-#                 "status": "ValidationError",
-#                 "auto_approved": False,
-#                 "payment_mode": payload_out.get("payment_mode"),
-#                 "error_msg": str(e),
-#             }
-#         st.write("Payload")
-#         st.json(payload_out)
-#         try:
-#             status = validation_json['tag']
-#             st.write(status)
-#             claim_id = save_expense_claim(payload_out,status)
-#             st.success(f"✅ Expense Claim saved successfully! Claim ID: **{claim_id}**")
-#         except Exception as e:
-#             st.error(f"❌ Database insert failed: {e}")
-#             st.stop()
+#     # ack email
+#     try:
+#         tag = validation_json.get("tag", "Pending")
+#         decision = validation_json.get("decision")
+#         comments = validation_json.get("comments") or deep_get(validation_json, "validation.message") or "No additional comments"
+#         employee_name = st.session_state.get("first_name")
+#         emp_id_for_email = payload_out.get("employee_id") or st.session_state.get("emp_id")
+#         category = (payload_out.get("category") or "other").title()
+#         amount = payload_out.get("total_amount", 0.0)
+#         currency = payload_out.get("currency", "INR")
+#         vendor = payload_out.get("vendor")
+#         expense_date = payload_out.get("expense_date")
 
-#         # 3) Map and log (status_val, payment_mode, auto_approved + raw)
-#         try:
-#             summary = log_validation_result(
-#                 claim_id=claim_id,
-#                 employee_id=payload_out.get("employee_id") or emp_id,
-#                 validation_obj=status,
-#             )
-#         except Exception as log_ex:
-#             summary = {
-#                 "claim_id": claim_id,
-#                 "status_val": "LogError",
-#                 "auto_approved": False,
-#                 "log_error": str(log_ex),
-#             }
+#         subject, content = mail_utils.draft_employee_ack_on_upload(
+#             claim_id=claim_id,
+#             employee_name=employee_name,
+#             employee_id=emp_id_for_email,
+#             category=category,
+#             amount=amount,
+#             currency=currency,
+#             vendor=vendor,
+#             expense_date=expense_date,
+#             tag=tag,
+#             decision=decision,
+#             comments=comments,
+#         )
+#         sent = mail_utils.send_email(RECIPIENT_OVERRIDE, subject, content)
+#         if sent:
+#             st.success(f"📧 Acknowledgement sent to {RECIPIENT_OVERRIDE}")
+#         else:
+#             st.warning(f"Could not send email to {RECIPIENT_OVERRIDE}. Check SMTP credentials/connectivity.")
+#     except Exception as e:
+#         st.warning(f"Email step failed: {e}")
 
-#         # 4) UI feedback
-#         st.info("Validation summary")
-#         st.json(summary)
-
-#         with st.expander("Full validation response"):
-#             st.json(validation_json)
-
-
-   
-
-# # -------------------------------------------------
-# # DASHBOARD WRAPPER
-# # -------------------------------------------------
-# def dashboard(emp_id: str):
-#     extractor_node_ui(emp_id, OUTPUT_DIR, input_dir)
-
-# # -------------------------------------------------
-# # INIT LOCAL (PER-PAGE) STATE FOR EXTRACTOR UI
-# # -------------------------------------------------
+# # -------- page wiring --------
 # for key, default in {
-#     "ui_step": "idle",               # "idle" | "form"
+#     "ui_step": "idle",
 #     "extraction_resp": None,
 #     "extracted_payload": None,
 #     "uploaded_image_path": None,
@@ -733,49 +765,214 @@
 #     if key not in st.session_state:
 #         st.session_state[key] = default
 
-# # -------------------------------------------------
-# # PAGE RENDER
-# # -------------------------------------------------
-
-# # 1. Make sure user is allowed here
 # ensure_employee_allowed()
 
-# # 2. Sidebar info / cross-nav
 # st.sidebar.write(f"Logged in as {st.session_state.email}")
 # st.sidebar.button("Logout", on_click=do_logout_and_return)
-
-# # If manager, show button to jump
 # if st.session_state.access_label == "M":
 #     st.sidebar.button("Manager View", on_click=go_manager)
-
-# # If finance-capable user somehow lands here, let them jump
-# if (
-#     st.session_state.access_label == "F"
-#     or (st.session_state.get("email", "").lower() == "finance@company.com")
-# ):
+# if st.session_state.access_label == "F" or (st.session_state.get("email", "").lower() == "finance@company.com"):
 #     st.sidebar.button("Finance View", on_click=go_finance)
 
-# # 3. Load employee metadata (emp_id etc.) if not present
 # if not st.session_state.get("emp_id"):
-#     details = _agent.load_employee_by_email(st.session_state.email)
+#     details = db_utils.load_employee_by_email(st.session_state.email)
 #     if details:
 #         st.session_state.emp_id = details.get("employee_id")
 #         st.session_state.grade = details.get("grade")
 #         st.session_state.manager_id = details.get("manager_id")
 #         st.session_state.first_name = details.get("first_name")
 
-# # 4. Greeting
 # emp_name_display = st.session_state.get("first_name") or st.session_state.email
 # st.subheader(f"Welcome, {emp_name_display}! 👋")
 
-# # 5. MAIN CONTENT TABS
 # tab_upload, tab_claims = st.tabs(["📤 Upload Bill", "💼 Claims Dashboard"])
-
 # with tab_upload:
-#     dashboard(st.session_state.get("emp_id"))
-
+#     extractor_node_ui(st.session_state.get("emp_id"), OUTPUT_DIR, input_dir)
 # with tab_claims:
 #     show_claims_dashboard()
+
+
+
+
+# # -------- extractor UI (only change is log_validation_result input) --------
+# def extractor_node_ui(emp_id: str, output_dir: str, input_dir: Path):
+#     uploaded_file = st.file_uploader(
+#         "Upload invoice/receipt (PNG/JPG/JPEG/WEBP/PDF)",
+#         type=["png", "jpg", "jpeg", "webp", "pdf"],
+#         accept_multiple_files=False,
+#         key="uploader_invoice_image",
+#     )
+
+#     c1, c2 = st.columns([1, 1])
+#     with c1:
+#         run_clicked = st.button("Click to Review", use_container_width=True, key="run_extractor_btn")
+#     with c2:
+#         reset_clicked = st.button("Reset", use_container_width=True, key="reset_extractor_btn")
+
+#     if reset_clicked:
+#         st.session_state.ui_step = "idle"
+#         st.session_state.extraction_resp = None
+#         st.session_state.extracted_payload = None
+#         st.session_state.uploaded_image_path = None
+#         st.session_state.last_payload = None
+#         st.success("Extractor state cleared.")
+#         return
+
+#     if run_clicked:
+#         if not emp_id:
+#             st.warning("Please log in again: no emp_id in session.")
+#             return
+#         if not uploaded_file:
+#             st.warning("Please upload an image/PDF file first.")
+#             return
+
+#         safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", uploaded_file.name)
+#         file_path = input_dir / safe_name
+#         with open(file_path, "wb") as f:
+#             f.write(uploaded_file.getbuffer())
+
+#         try:
+#             params = {"image_name": str(file_path), "emp_id": emp_id}
+#             body = {"phase": "extract", "json_out_dir": output_dir, "save_json_file": True}
+#             r = requests.post(AGENT_ENDPOINT, params=params, json=body, timeout=120)
+#             if r.status_code != 200:
+#                 st.error(f"API error {r.status_code}: {r.text}")
+#                 return
+#             resp = r.json() or {}
+#             payload = deep_get(resp, "extraction.payload", {}) or {}
+#             st.session_state.uploaded_image_path = str(file_path)
+#             st.session_state.extraction_resp = resp
+#             st.session_state.extracted_payload = payload
+#             st.session_state.ui_step = "form"
+#             st.success("Extraction complete ✅")
+#             st.write("**Saved at:**", str(file_path))
+#         except requests.exceptions.RequestException as e:
+#             st.error(f"Connection error: {e}")
+#             return
+
+#     if st.session_state.ui_step != "form":
+#         st.info("Upload a file and click **Click to Review** to continue.")
+#         return
+
+#     payload = st.session_state.extracted_payload or {}
+#     if not isinstance(payload, dict) or not payload:
+#         st.warning("No payload returned from API.")
+#         if st.session_state.extraction_resp:
+#             with st.expander("Raw API response"):
+#                 st.json(st.session_state.extraction_resp)
+#         return
+
+#     with st.expander("Raw extraction payload"):
+#         st.json(payload)
+
+#     payload_out = render_dynamic_form(payload, emp_id)
+#     if payload_out is None:
+#         return
+
+#     # validate
+#     try:
+#         r = requests.post(AGENT_ENDPOINT, params={"phase": "validate"}, json=payload_out, timeout=120)
+#         r.raise_for_status()
+#         validation_json = r.json() or {}
+#     except requests.exceptions.RequestException as e:
+#         validation_json = {"status": "ValidationError", "auto_approved": False, "error_msg": str(e)}
+
+#     # save claim
+#     try:
+#         tag_status = validation_json.get('tag', 'Pending')
+#         claim_id = save_expense_claim(payload_out, tag_status)
+#         st.success(f"✅ Expense Claim saved successfully! Claim ID: **{claim_id}**")
+#     except Exception as e:
+#         st.error(f"❌ Database insert failed: {e}")
+#         st.stop()
+
+#     # log validation (PASS THE DICT!)
+#     try:
+#         _ = log_validation_result(
+#             claim_id=claim_id,
+#             employee_id=payload_out.get("employee_id") or emp_id,
+#             validation_obj=validation_json,  # ← fixed
+#         )
+#     except Exception as log_ex:
+#         st.warning(f"Validation log failed: {log_ex}")
+
+#     # ack email
+#     try:
+#         tag = validation_json.get("tag", "Pending")
+#         decision = validation_json.get("decision")
+#         comments = validation_json.get("comments") or deep_get(validation_json, "validation.message") or "No additional comments"
+#         employee_name = st.session_state.get("first_name")
+#         emp_id_for_email = payload_out.get("employee_id") or st.session_state.get("emp_id")
+#         category = (payload_out.get("category") or "other").title()
+#         amount = payload_out.get("total_amount", 0.0)
+#         currency = payload_out.get("currency", "INR")
+#         vendor = payload_out.get("vendor")
+#         expense_date = payload_out.get("expense_date")
+
+#         subject, content = mail_utils.draft_employee_ack_on_upload(
+#             claim_id=claim_id,
+#             employee_name=employee_name,
+#             employee_id=emp_id_for_email,
+#             category=category,
+#             amount=amount,
+#             currency=currency,
+#             vendor=vendor,
+#             expense_date=expense_date,
+#             tag=tag,
+#             decision=decision,
+#             comments=comments,
+#         )
+#         sent = mail_utils.send_email(RECIPIENT_OVERRIDE, subject, content)
+#         if sent:
+#             st.success(f"📧 Acknowledgement sent to {RECIPIENT_OVERRIDE}")
+#         else:
+#             st.warning(f"Could not send email to {RECIPIENT_OVERRIDE}. Check SMTP credentials/connectivity.")
+#     except Exception as e:
+#         st.warning(f"Email step failed: {e}")
+
+# # -------- page wiring --------
+# for key, default in {
+#     "ui_step": "idle",
+#     "extraction_resp": None,
+#     "extracted_payload": None,
+#     "uploaded_image_path": None,
+#     "last_payload": None,
+# }.items():
+#     if key not in st.session_state:
+#         st.session_state[key] = default
+
+# ensure_employee_allowed()
+
+# st.sidebar.write(f"Logged in as {st.session_state.email}")
+# st.sidebar.button("Logout", on_click=do_logout_and_return)
+# if st.session_state.access_label == "M":
+#     st.sidebar.button("Manager View", on_click=go_manager)
+# if st.session_state.access_label == "F" or (st.session_state.get("email", "").lower() == "finance@company.com"):
+#     st.sidebar.button("Finance View", on_click=go_finance)
+
+# if not st.session_state.get("emp_id"):
+#     details = db_utils.load_employee_by_email(st.session_state.email)
+#     if details:
+#         st.session_state.emp_id = details.get("employee_id")
+#         st.session_state.grade = details.get("grade")
+#         st.session_state.manager_id = details.get("manager_id")
+#         st.session_state.first_name = details.get("first_name")
+
+# emp_name_display = st.session_state.get("first_name") or st.session_state.email
+# st.subheader(f"Welcome, {emp_name_display}! 👋")
+
+# tab_upload, tab_claims = st.tabs(["📤 Upload Bill", "💼 Claims Dashboard"])
+# with tab_upload:
+#     extractor_node_ui(st.session_state.get("emp_id"), OUTPUT_DIR, input_dir)
+# with tab_claims:
+#     show_claims_dashboard()
+
+
+
+
+# # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+
 
 # employee_dashboard.py
 import os
@@ -786,20 +983,15 @@ from pathlib import Path
 from datetime import date, datetime
 import requests
 import pandas as pd
-from sqlalchemy import create_engine, text
 import streamlit as st
-import agent as _agent  # must expose load_employee_by_email(...)
 
-# DB helpers already used in your app
-from db_utils import save_expense_claim, log_validation_result
-from claims_dashboard import load_recent_claims
-
-# Email helper
+import agent as _agent
+import db_utils
+from db_utils import save_expense_claim, log_validation_result, load_recent_claims
 import utils as mail_utils
-# (No DB lookup for email now; we hardcode recipient)
 
 # -------------------------------------------------
-# PAGE CONFIG (must be first Streamlit call)
+# PAGE CONFIG (must be the first Streamlit call)
 # -------------------------------------------------
 st.set_page_config(page_title="Employee Dashboard", layout="wide")
 
@@ -808,18 +1000,16 @@ st.set_page_config(page_title="Employee Dashboard", layout="wide")
 # -------------------------------------------------
 BASE_API = "http://localhost:8000"
 AGENT_ENDPOINT = f"{BASE_API}/api/Agent"
-
 OUTPUT_DIR = "output/langchain_json"
 Path(OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
 
 input_dir = Path("./input/images")
 input_dir.mkdir(parents=True, exist_ok=True)
 
-# >>> HARD-CODED RECIPIENT (per request)
 RECIPIENT_OVERRIDE = "kumar.vipin.official@gmail.com"
 
 # -------------------------------------------------
-# SESSION ENFORCERS AND NAV HELPERS
+# SESSION / NAV HELPERS
 # -------------------------------------------------
 def do_logout_and_return():
     st.session_state.logged_in = False
@@ -835,16 +1025,11 @@ def go_finance():
     st.switch_page("pages/finance_dashboard.py")
 
 def ensure_employee_allowed():
-    """
-    Must be logged in AND have access_label in {"E","M"}.
-    Otherwise redirect or stop.
-    """
     if not st.session_state.get("logged_in", False):
         st.error("Please login first.")
         if st.button("Go to Login"):
             st.switch_page("portal_login.py")
         st.stop()
-
     access_label = st.session_state.get("access_label", "")
     if access_label not in {"E", "M"}:
         st.error("Access denied. Employee portal only.")
@@ -855,7 +1040,6 @@ def ensure_employee_allowed():
 # SMALL HELPERS
 # -------------------------------------------------
 def parse_iso_date(s: str) -> date:
-    """Parse YYYY-MM-DD; fallback to today on error."""
     try:
         return datetime.strptime(s, "%Y-%m-%d").date()
     except Exception:
@@ -865,11 +1049,10 @@ def to_iso(d: date | str | None) -> str | None:
     if d is None:
         return None
     if isinstance(d, str):
-        return d  # assume already ISO
+        return d
     return d.isoformat()
 
 def deep_get(d, path, default=None):
-    """Safely get a nested key by dotted path."""
     cur = d or {}
     for part in path.split('.'):
         if not isinstance(cur, dict) or part not in cur:
@@ -878,19 +1061,17 @@ def deep_get(d, path, default=None):
     return cur
 
 # -------------------------------------------------
-# CLAIMS DASHBOARD (for this employee only)
+# CLAIMS TABLE
 # -------------------------------------------------
 def show_claims_dashboard():
     st.caption("Showing your most recent claims")
-
     employee_id = st.session_state.get("emp_id")
     if not employee_id:
         st.warning("⚠️ Missing employee_id in session.")
         return
-
     try:
         df = load_recent_claims(employee_id, 50)
-        if df.empty:
+        if df is None or df.empty:
             st.info("You have not submitted any claims yet.")
         else:
             st.dataframe(
@@ -1031,7 +1212,6 @@ def render_form_hotel(payload, emp_id):
     }
     return payload_out
 
-
 def render_form_travel(payload, emp_id):
     with st.form(key="invoice_form_travel", clear_on_submit=False):
         st.write("**Travel Claim Details**")
@@ -1096,7 +1276,6 @@ def render_form_travel(payload, emp_id):
     }
     return payload_out
 
-
 def render_form_food(payload, emp_id):
     with st.form(key="invoice_form_food", clear_on_submit=False):
         st.write("**Food / Meal Claim Details**")
@@ -1149,7 +1328,6 @@ def render_form_food(payload, emp_id):
         "category": "food",
     }
     return payload_out
-
 
 def render_form_local_conv(payload, emp_id):
     with st.form(key="invoice_form_local", clear_on_submit=False):
@@ -1209,7 +1387,6 @@ def render_form_local_conv(payload, emp_id):
     }
     return payload_out
 
-
 def render_form_other(payload, emp_id):
     with st.form(key="invoice_form_other", clear_on_submit=False):
         st.write("Other / Misc Expense")
@@ -1260,13 +1437,7 @@ def render_form_other(payload, emp_id):
     }
     return payload_out
 
-
 def render_dynamic_form(payload, emp_id):
-    """
-    Pick which form to render based on payload['category'].
-    Returns a normalized payload_out dict if the user clicked Submit,
-    else None.
-    """
     cat = (payload.get("category") or "").strip().lower()
     if cat == "hotel":
         return render_form_hotel(payload, emp_id)
@@ -1277,26 +1448,12 @@ def render_dynamic_form(payload, emp_id):
     elif cat in ["local", "local_conveyance", "local conveyance", "local_convey"]:
         return render_form_local_conv(payload, emp_id)
     else:
-        # default "other"
         return render_form_other(payload, emp_id)
 
 # -------------------------------------------------
-# EXTRACTOR NODE UI
+# EXTRACTOR UI
 # -------------------------------------------------
 def extractor_node_ui(emp_id: str, output_dir: str, input_dir: Path):
-    """
-    Flow:
-    1. Upload file
-    2. Click Review -> call /api/Agent?image_name=...&emp_id=...
-       body: { phase:"extract", json_out_dir, save_json_file }
-    3. We store extraction payload in session.
-    4. We render a category-specific form.
-    5. On submit of that form:
-       - run validation via /api/Agent?phase=validate
-       - save_expense_claim(payload_out, tag)
-       - log_validation_result(...)
-       - send ACK email to hard-coded recipient
-    """
     uploaded_file = st.file_uploader(
         "Upload invoice/receipt (PNG/JPG/JPEG/WEBP/PDF)",
         type=["png", "jpg", "jpeg", "webp", "pdf"],
@@ -1310,7 +1467,6 @@ def extractor_node_ui(emp_id: str, output_dir: str, input_dir: Path):
     with c2:
         reset_clicked = st.button("Reset", use_container_width=True, key="reset_extractor_btn")
 
-    # Reset flow
     if reset_clicked:
         st.session_state.ui_step = "idle"
         st.session_state.extraction_resp = None
@@ -1320,7 +1476,6 @@ def extractor_node_ui(emp_id: str, output_dir: str, input_dir: Path):
         st.success("Extractor state cleared.")
         return
 
-    # Run extraction
     if run_clicked:
         if not emp_id:
             st.warning("Please log in again: no emp_id in session.")
@@ -1329,49 +1484,34 @@ def extractor_node_ui(emp_id: str, output_dir: str, input_dir: Path):
             st.warning("Please upload an image/PDF file first.")
             return
 
-        # save uploaded file locally
         safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", uploaded_file.name)
         file_path = input_dir / safe_name
         with open(file_path, "wb") as f:
             f.write(uploaded_file.getbuffer())
 
         try:
-            params = {
-                "image_name": str(file_path),
-                "emp_id": emp_id,
-            }
-            body = {
-                "phase": "extract",
-                "json_out_dir": output_dir,
-                "save_json_file": True,
-            }
-
+            params = {"image_name": str(file_path), "emp_id": emp_id}
+            body = {"phase": "extract", "json_out_dir": output_dir, "save_json_file": True}
             r = requests.post(AGENT_ENDPOINT, params=params, json=body, timeout=120)
             if r.status_code != 200:
                 st.error(f"API error {r.status_code}: {r.text}")
                 return
-
             resp = r.json() or {}
             payload = deep_get(resp, "extraction.payload", {}) or {}
-
             st.session_state.uploaded_image_path = str(file_path)
             st.session_state.extraction_resp = resp
             st.session_state.extracted_payload = payload
             st.session_state.ui_step = "form"
-
             st.success("Extraction complete ✅")
             st.write("**Saved at:**", str(file_path))
-
         except requests.exceptions.RequestException as e:
             st.error(f"Connection error: {e}")
             return
 
-    # If we're not in 'form' mode yet, stop here
     if st.session_state.ui_step != "form":
         st.info("Upload a file and click **Click to Review** to continue.")
         return
 
-    # Render payload / raw preview
     payload = st.session_state.extracted_payload or {}
     if not isinstance(payload, dict) or not payload:
         st.warning("No payload returned from API.")
@@ -1383,118 +1523,76 @@ def extractor_node_ui(emp_id: str, output_dir: str, input_dir: Path):
     with st.expander("Raw extraction payload"):
         st.json(payload)
 
-    # --- Dynamic category form ---
     payload_out = render_dynamic_form(payload, emp_id)
+    if payload_out is None:
+        return
 
-    if payload_out is not None:
-        # user clicked Submit inside the category form
-        st.session_state.ui_step = "form"
+    # validate
+    try:
+        r = requests.post(AGENT_ENDPOINT, params={"phase": "validate"}, json=payload_out, timeout=120)
+        r.raise_for_status()
+        validation_json = r.json() or {}
+    except requests.exceptions.RequestException as e:
+        validation_json = {"status": "ValidationError", "auto_approved": False, "error_msg": str(e)}
 
-        # --- Validate via API ---
-        try:
-            r = requests.post(
-                AGENT_ENDPOINT,
-                params={"phase": "validate"},
-                json=payload_out,
-                timeout=120
-            )
-            r.raise_for_status()
-            validation_json = r.json() or {}
-            # st.write("Validation Payload")
-            # st.json(validation_json)
-        except requests.exceptions.RequestException as e:
-            validation_json = {
-                "status": "ValidationError",
-                "auto_approved": False,
-                "payment_mode": payload_out.get("payment_mode"),
-                "error_msg": str(e),
-            }
+    # save claim
+    try:
+        tag_status = validation_json.get('tag', 'Pending')
+        claim_id = save_expense_claim(payload_out, tag_status)
+        st.success(f"✅ Expense Claim saved successfully! Claim ID: **{claim_id}**")
+    except Exception as e:
+        st.error(f"❌ Database insert failed: {e}")
+        st.stop()
 
-        # st.write("Payload")
-        # st.json(payload_out)
+    # log validation (PASS THE DICT!)
+    try:
+        _ = log_validation_result(
+            claim_id=claim_id,
+            employee_id=payload_out.get("employee_id") or emp_id,
+            validation_obj=validation_json,
+        )
+    except Exception as log_ex:
+        st.warning(f"Validation log failed: {log_ex}")
 
-        # --- Persist to DB ---
-        try:
-            tag_status = validation_json.get('tag', 'Pending')
-            # st.write(tag_status)
-            claim_id = save_expense_claim(payload_out, tag_status)
-            st.success(f"✅ Expense Claim saved successfully! Claim ID: **{claim_id}**")
-        except Exception as e:
-            st.error(f"❌ Database insert failed: {e}")
-            st.stop()
+    # ack email
+    try:
+        tag = validation_json.get("tag", "Pending")
+        decision = validation_json.get("decision")
+        comments = validation_json.get("comments") or deep_get(validation_json, "validation.message") or "No additional comments"
+        employee_name = st.session_state.get("first_name")
+        emp_id_for_email = payload_out.get("employee_id") or st.session_state.get("emp_id")
+        category = (payload_out.get("category") or "other").title()
+        amount = payload_out.get("total_amount", 0.0)
+        currency = payload_out.get("currency", "INR")
+        vendor = payload_out.get("vendor")
+        expense_date = payload_out.get("expense_date")
 
-        # --- Log validation outcome ---
-        try:
-            summary = log_validation_result(
-                claim_id=claim_id,
-                employee_id=payload_out.get("employee_id") or emp_id,
-                validation_obj=tag_status,
-            )
-        except Exception as log_ex:
-            summary = {
-                "claim_id": claim_id,
-                "status_val": "LogError",
-                "auto_approved": False,
-                "log_error": str(log_ex),
-            }
-
-        # --- UI feedback ---
-        # st.info("Validation summary")
-        # st.json(summary)
-
-        # with st.expander("Full validation response"):
-        #     st.json(validation_json)
-
-        # --- Email ACK to hardcoded recipient ---
-        try:
-            # Build friendly fields
-            tag = validation_json.get("tag", "Pending")
-            decision = validation_json.get("decision")
-            comments = (
-                validation_json.get("comments")
-                or deep_get(validation_json, "validation.message")
-                or "No additional comments"
-            )
-            employee_name = st.session_state.get("first_name")  # for salutation
-            emp_id_for_email = payload_out.get("employee_id") or st.session_state.get("emp_id")
-            category = (payload_out.get("category") or "other").title()
-            amount = payload_out.get("total_amount", 0.0)
-            currency = payload_out.get("currency", "INR")
-            vendor = payload_out.get("vendor")
-            expense_date = payload_out.get("expense_date")
-
-            subject, body = mail_utils.draft_employee_ack_on_upload(
-                claim_id=claim_id,
-                employee_name=employee_name,
-                employee_id=emp_id_for_email,
-                category=category,
-                amount=amount,
-                currency=currency,
-                vendor=vendor,
-                expense_date=expense_date,
-                tag=tag,
-                decision=decision,
-                comments=comments,
-            )
-            sent = mail_utils.send_email(RECIPIENT_OVERRIDE, subject, body)
-            if sent:
-                st.success(f"📧 Acknowledgement sent to {RECIPIENT_OVERRIDE}")
-            else:
-                st.warning(f"Could not send email to {RECIPIENT_OVERRIDE}. Check SMTP credentials/connectivity.")
-        except Exception as e:
-            st.warning(f"Email step failed: {e}")
+        subject, content = mail_utils.draft_employee_ack_on_upload(
+            claim_id=claim_id,
+            employee_name=employee_name,
+            employee_id=emp_id_for_email,
+            category=category,
+            amount=amount,
+            currency=currency,
+            vendor=vendor,
+            expense_date=expense_date,
+            tag=tag,
+            decision=decision,
+            comments=comments,
+        )
+        sent = mail_utils.send_email(RECIPIENT_OVERRIDE, subject, content)
+        if sent:
+            st.success(f"📧 Acknowledgement sent to {RECIPIENT_OVERRIDE}")
+        else:
+            st.warning(f"Could not send email to {RECIPIENT_OVERRIDE}. Check SMTP credentials/connectivity.")
+    except Exception as e:
+        st.warning(f"Email step failed: {e}")
 
 # -------------------------------------------------
-# DASHBOARD WRAPPER
-# -------------------------------------------------
-def dashboard(emp_id: str):
-    extractor_node_ui(emp_id, OUTPUT_DIR, input_dir)
-
-# -------------------------------------------------
-# INIT LOCAL (PER-PAGE) STATE FOR EXTRACTOR UI
+# PAGE WIRING
 # -------------------------------------------------
 for key, default in {
-    "ui_step": "idle",               # "idle" | "form"
+    "ui_step": "idle",
     "extraction_resp": None,
     "extracted_payload": None,
     "uploaded_image_path": None,
@@ -1503,46 +1601,28 @@ for key, default in {
     if key not in st.session_state:
         st.session_state[key] = default
 
-# -------------------------------------------------
-# PAGE RENDER
-# -------------------------------------------------
-
-# 1. Make sure user is allowed here
 ensure_employee_allowed()
 
-# 2. Sidebar info / cross-nav
 st.sidebar.write(f"Logged in as {st.session_state.email}")
 st.sidebar.button("Logout", on_click=do_logout_and_return)
-
-# If manager, show button to jump
 if st.session_state.access_label == "M":
     st.sidebar.button("Manager View", on_click=go_manager)
-
-# If finance-capable user somehow lands here, let them jump
-if (
-    st.session_state.access_label == "F"
-    or (st.session_state.get("email", "").lower() == "finance@company.com")
-):
+if st.session_state.access_label == "F" or (st.session_state.get("email", "").lower() == "finance@company.com"):
     st.sidebar.button("Finance View", on_click=go_finance)
 
-# 3. Load employee metadata (emp_id etc.) if not present
 if not st.session_state.get("emp_id"):
-    details = _agent.load_employee_by_email(st.session_state.email)
+    details = db_utils.load_employee_by_email(st.session_state.email)
     if details:
         st.session_state.emp_id = details.get("employee_id")
         st.session_state.grade = details.get("grade")
         st.session_state.manager_id = details.get("manager_id")
         st.session_state.first_name = details.get("first_name")
 
-# 4. Greeting
 emp_name_display = st.session_state.get("first_name") or st.session_state.email
 st.subheader(f"Welcome, {emp_name_display}! 👋")
 
-# 5. MAIN CONTENT TABS
 tab_upload, tab_claims = st.tabs(["📤 Upload Bill", "💼 Claims Dashboard"])
-
 with tab_upload:
-    dashboard(st.session_state.get("emp_id"))
-
+    extractor_node_ui(st.session_state.get("emp_id"), OUTPUT_DIR, input_dir)
 with tab_claims:
     show_claims_dashboard()
