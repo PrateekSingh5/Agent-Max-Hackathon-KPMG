@@ -860,6 +860,50 @@ def fetch_df(sql, params=None):
             return pd.DataFrame()
         return pd.DataFrame(rows)
 
+import json
+import re
+
+def safe_json_parse(text: str):
+    """
+    Safely parse possibly messy AI/LLM JSON output into a dict.
+    Works even if the string has extra whitespace, text before/after the JSON,
+    or multiple JSON objects.
+    """
+    if not text or not isinstance(text, str):
+        print("⚠️ No text to parse")
+        return {}
+
+    # Trim whitespace/newlines
+    cleaned = text.strip()
+
+    # Try normal parse first
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass  # fallback below
+
+    # Extract the first valid {...} JSON block using regex
+    match = re.search(r'(\{[\s\S]*\})', cleaned)
+    if match:
+        candidate = match.group(1)
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError as e:
+            print(f"❌ JSON decoding error: {e}")
+            print("⚠️ Raw candidate start:", repr(candidate[:200]))
+            return {}
+    else:
+        print("⚠️ Could not find a valid JSON object in text")
+        print("Raw preview:", repr(cleaned[:200]))
+        return {}
+
+def ensure_list(value, split_on="."):
+    if isinstance(value, str):
+        return [v.strip() for v in value.split(split_on) if v.strip()]
+    if isinstance(value, list):
+        return value
+    return []
+
 
 # -------------------------------------------------------------------
 # Main Finance AI Agent
@@ -887,13 +931,47 @@ def run_finance_agent(start_date: date = None, end_date: date = None):
             COUNT(*) AS total_claims,
             COALESCE(SUM(amount), 0)::float AS total_spend,
             AVG(amount)::float AS avg_claim_amount,
-            AVG(CASE WHEN auto_approved THEN 1 ELSE 0 END)::float AS auto_approval_rate,
-            SUM(CASE WHEN fraud_flag THEN 1 ELSE 0 END) AS fraud_flags,
-            SUM(CASE WHEN is_duplicate THEN 1 ELSE 0 END) AS duplicates
+            AVG(CASE WHEN auto_approved THEN 1 ELSE 0 END)::float AS auto_approval_rate
         FROM expense_claims
         {sql_filter};
     """
     df_summary = fetch_df(summary_sql, params)
+
+
+
+    
+    records_sql = f"""
+        SELECT 
+            c.claim_id,
+            c.employee_id,
+            (e.first_name || ' ' || e.last_name) AS employee_name,
+            c.claim_date,
+            c.expense_category,
+            c.amount::float,
+            c.currency,
+            c.vendor_name,
+            c.payment_mode,
+            c.status,
+            c.auto_approved,
+            c.is_duplicate,
+            c.fraud_flag,
+            c.details,
+            p.max_allowance::float AS policy_limit,
+            CASE 
+                WHEN c.amount > p.max_allowance THEN TRUE 
+                ELSE FALSE 
+            END AS over_limit_flag
+        FROM expense_claims c
+        JOIN employees e ON c.employee_id = e.employee_id
+        LEFT JOIN expense_policies p ON c.expense_category = p.category
+        WHERE c.claim_date BETWEEN %s AND %s
+        ORDER BY c.claim_date DESC;
+    """
+
+    params = [start_date, end_date]
+    df_claims = fetch_df(records_sql, params)
+
+
 
     top_categories_sql = f"""
         SELECT expense_category, SUM(amount)::float AS total_spend
@@ -943,8 +1021,6 @@ def run_finance_agent(start_date: date = None, end_date: date = None):
         "total_spend": 0.0,
         "avg_claim_amount": 0.0,
         "auto_approval_rate": 0.0,
-        "fraud_flags": 0,
-        "duplicates": 0
     }
 
     insights = []
@@ -959,35 +1035,79 @@ def run_finance_agent(start_date: date = None, end_date: date = None):
     if not df_violations.empty:
         insights.append(f"{len(df_violations)} claims exceeded their policy limits.")
 
-    if key_metrics["fraud_flags"] > 0:
-        insights.append(f"{key_metrics['fraud_flags']} claims flagged as potential frauds.")
+    # if key_metrics["fraud_flags"] > 0:
+    #     insights.append(f"{key_metrics['fraud_flags']} claims flagged as potential frauds.")
 
-    if key_metrics["duplicates"] > 0:
-        insights.append(f"{key_metrics['duplicates']} duplicate claims detected.")
+    # if key_metrics["duplicates"] > 0:
+    #     insights.append(f"{key_metrics['duplicates']} duplicate claims detected.")
 
     policy_optimizations = []
     if not df_violations.empty:
         policy_optimizations.append("Revisit category spending limits in expense_policies for high-frequency violations.")
     if key_metrics["auto_approval_rate"] < 0.3:
         policy_optimizations.append("Increase automation thresholds to improve auto-approval efficiency.")
-    if key_metrics["fraud_flags"] > 0:
-        policy_optimizations.append("Tighten fraud detection rules for flagged vendors or employees.")
+    # if key_metrics["fraud_flags"] > 0:
+    #     policy_optimizations.append("Tighten fraud detection rules for flagged vendors or employees.")
 
     risk_alerts = []
     if not df_violations.empty:
         risk_alerts.append(f"{len(df_violations)} employees exceeded expense caps.")
-    if key_metrics["fraud_flags"] > 0:
-        risk_alerts.append("Fraud detection triggered — review flagged claims immediately.")
+    # if key_metrics["fraud_flags"] > 0:
+    #     risk_alerts.append("Fraud detection triggered — review flagged claims immediately.")
 
     # ----------------------------------------------------------------
     # 4. Optional: Generate Executive Summary using GPT
     # ----------------------------------------------------------------
     executive_summary = "Finance data analyzed successfully."
     try:
+
+        System_prompt="""
+    You are an autonomous Finance Intelligence Agent with full SQL querying capabilities.
+    You are connected to a PostgreSQL database named agent_max containing these tables:
+
+    - employees(employee_id, employee_name, department, designation)
+    - expense_claims(id, claim_id, employee_id, claim_date, expense_category, amount, currency, vendor_name, payment_mode, status, auto_approved, is_duplicate, fraud_flag, details)
+    - expense_policies(policy_id, expense_category, max_limit, approval_required, allowed_payment_modes)
+    - vendors(vendor_id, vendor_name, risk_score, last_transaction_date)
+    - reimbursement_accounts(...)
+    - per_diem_rates(...)
+    - expense_validation_logs(...)
+
+    Your task is to:
+    1. Generate SQL queries to summarize key financial metrics.
+    2. Detect anomalies (e.g.,Reoccuring claims, highest cliaming employee, over-limit expenses).
+    3. Identify top departments, vendors, and categories by spend.
+    4. Recommend policy optimizations.
+    5. Output **structured JSON** insights ready for the Streamlit dashboard.
+    6. Recommend Claim decisions
+
+    Your JSON output **must** follow this schema:
+
+    {
+    "executive_summary": {
+        "Summary":"string", 
+        "actions":"string",
+        "recommended_claim_decisions":"string"
+    },
+    "key_metrics": {
+        "total_claims": int,
+        "total_spend": float,
+        "avg_claim_amount": float,
+        "auto_approval_rate": float,
+    },
+    "insights": ["string", "..."],
+    "policy_optimizations": ["string", "..."],
+    "risk_alerts": ["string", "..."],
+    "actions": ["string", "..."],
+    }
+    """
+
+
         client = OpenAI()
         prompt = f"""
         You are a corporate finance analytics assistant.
-        Based on the following data, generate a concise 3-line summary for a CFO dashboard.
+        Based on the following data, generate a concise summary for a CFO dashboard. 
+        Analyse the data and generate potential actions and Risks.
 
         Key Metrics:
         {json.dumps(key_metrics, indent=2)}
@@ -1000,12 +1120,15 @@ def run_finance_agent(start_date: date = None, end_date: date = None):
 
         Top Vendors:
         {json.dumps(df_vendors.to_dict(orient='records'), indent=2)}
+
+        All Claims:
+        {json.dumps(df_claims.to_dict(orient='records'), indent=2, default=str)}
         """
 
         completion = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "You are a financial analytics expert."},
+                {"role": "system", "content": System_prompt},
                 {"role": "user", "content": prompt}
             ]
         )
@@ -1014,21 +1137,36 @@ def run_finance_agent(start_date: date = None, end_date: date = None):
     except Exception as e:
         print(f"⚠️ GPT summary generation failed: {e}")
 
+    
     # ----------------------------------------------------------------
     # 5. Build Final JSON Result
     # ----------------------------------------------------------------
+    # import json
+    print(type(executive_summary))
+    print(executive_summary)
+
+    executive_summary_json = safe_json_parse(executive_summary)
+
+    # # Safely extract and split actions
+    
+    print(executive_summary_json)
+    # actions_field = executive_summary_json['executive_summary']["actions"]
+    print(executive_summary_json['executive_summary'])
+    exec_summary=executive_summary_json['executive_summary']
+
+
+    # Construct final result
     result = {
-        "executive_summary": executive_summary,
+        "executive_summary": exec_summary.get("Summary", ""),
         "key_metrics": key_metrics,
         "insights": insights,
         "policy_optimizations": policy_optimizations,
         "risk_alerts": risk_alerts,
-        "actions": [
-            "Audit flagged claims and duplicates.",
-            "Review vendor risk profiles for top spenders.",
-            "Optimize approval automation thresholds."
-        ],
-        "recommended_claim_decisions": []  # Placeholder for later AI decision logic
+        "actions": ensure_list(exec_summary.get("actions")),
+        "recommended_claim_decisions": ensure_list(exec_summary.get("recommended_claim_decisions")),
     }
+
+
+    print("result: ",result)
 
     return result

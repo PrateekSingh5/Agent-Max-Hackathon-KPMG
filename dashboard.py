@@ -651,7 +651,7 @@ def main():
     with tab_report:
         # ------------- SLICERS (2 rows) -------------
         today = date.today()
-        default_start = today - timedelta(days=365)
+        default_start = date(2024, 1, 1)
 
         # Row 1: Dates + Employee
         r1c1, r1c2, r1c3, r1c4 = st.columns([1.1, 1.1, 1.2, 0.6])
@@ -832,7 +832,7 @@ def main():
 
     col1, col2 = st.columns(2)
     with col1:
-        ai_start_date = st.date_input("Start Date (for AI analysis)", date(2025, 1, 1), key="ai_start")
+        ai_start_date = st.date_input("Start Date (for AI analysis)", date(2024, 1, 1), key="ai_start")
     with col2:
         ai_end_date = st.date_input("End Date (for AI analysis)", date.today(), key="ai_end")
 
@@ -853,7 +853,7 @@ def main():
                 st.stop()
 
         st.success("✅ AI Insights generated successfully")
-
+        print(ai_data)
         # -------------------------------------------------------------------
         # Executive Summary
         # -------------------------------------------------------------------
@@ -865,13 +865,11 @@ def main():
         # -------------------------------------------------------------------
         st.markdown("### 📊 Key Metrics")
         metrics = ai_data.get("key_metrics", {})
-        c1, c2, c3, c4, c5, c6 = st.columns(6)
+        c1, c2, c3= st.columns(3)
         c1.metric("Total Claims", f"{metrics.get('total_claims', 0):,}")
         c2.metric("Total Spend", f"₹{metrics.get('total_spend', 0):,.0f}")
         c3.metric("Avg Claim", f"₹{metrics.get('avg_claim_amount', 0):,.0f}")
-        c4.metric("Auto-Approval %", f"{metrics.get('auto_approval_rate', 0)*100:.1f}%")
-        c5.metric("Fraud Flags", f"{metrics.get('fraud_flags', 0):,}")
-        c6.metric("Duplicates", f"{metrics.get('duplicates', 0):,}")
+        # c4.metric("Auto-Approval %", f"{metrics.get('auto_approval_rate', 0)*100:.1f}%")
 
         # -------------------------------------------------------------------
         # Insights
@@ -921,16 +919,16 @@ def main():
         # Recommended Claim-Level Decisions
         # -------------------------------------------------------------------
         st.markdown("### 🧍‍♂️ AI-Recommended Claim Decisions")
+
         claim_recs = ai_data.get("recommended_claim_decisions", [])
+
         if not claim_recs:
             st.info("No claim-level AI recommendations available.")
         else:
-            for rec in claim_recs:
-                with st.expander(f"Claim {rec['claim_id']} — {rec.get('employee_name', 'N/A')}"):
-                    st.write(f"**Amount:** ₹{rec['amount']:,.2f}")
-                    st.write(f"**Category:** {rec['category']}")
-                    st.write(f"**AI Suggested Decision:** {rec['ai_decision']}")
-                    st.write(f"**Reason:** {rec['reason']}")
+            for idx, rec_text in enumerate(claim_recs, start=1):
+                with st.expander(f"Recommendation {idx}"):
+                    st.write(rec_text)
+
 
 
     # # Ensure app runs in Streamlit
