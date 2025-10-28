@@ -20,6 +20,12 @@ import queries
 from fastapi.encoders import jsonable_encoder
 from db import get_connection, safe_query
 
+
+from datetime import date, datetime
+import datetime
+from agent import run_finance_agent
+
+
 # # SINGLE FastAPI INSTANCE
 app = _fastapi.FastAPI()
 
@@ -294,14 +300,8 @@ def health():
 #     return summary
 
 @app.get("/claims/summary")
-def claims_summary():
-    summary = queries.get_claims_summary()
-    proc = queries.get_avg_processing_time_by_date()  # returns metadata; safe default
-    summary.update(proc)
-    total = summary.get("total_claims", 0) or 0
-    auto = summary.get("auto_approved", 0) or summary.get("auto_approved_count", 0) or 0
-    summary["automation_rate"] = round((auto / total) if total else 0, 4)
-    return JSONResponse(content=jsonable_encoder(summary))
+def claims_summary(start_date: str | None = None, end_date: str | None = None):
+    return queries.get_claims_summary(start_date, end_date)
 
 
 @app.get("/claims/by-date")
@@ -493,6 +493,67 @@ def api_finance_decision(claim_id: str, body: FinanceDecisionBody):
     )
     return {"ok": True, "claim_id": claim_id, "status": "Approved" if body.decision == "Approve" else "Rejected"}
 
+#===============Finance agent===================
+
+
+# -------------------------------------------------------------------
+# Request / Response Schemas
+# -------------------------------------------------------------------
+class FinanceInsightsRequest(BaseModel):
+    start_date: Optional[date] = Field(None, description="Start date for analysis range")
+    end_date: Optional[date] = Field(None, description="End date for analysis range")
+    include_ai_recommendations: Optional[bool] = Field(
+        True, description="Include AI-based decision and policy recommendations"
+    )
+
+
+class FinanceInsightsResponse(BaseModel):
+    ok: bool
+    generated_at: str
+    executive_summary: Optional[str]
+    key_metrics: Optional[dict]
+    insights: Optional[list]
+    policy_optimizations: Optional[list]
+    risk_alerts: Optional[list]
+    actions: Optional[list]
+    recommended_claim_decisions: Optional[list]
+
+
+
+
+
+@app.post("/api/ai/finance-insights")
+def api_finance_insights(body: FinanceInsightsRequest):
+    """
+    AI-powered endpoint that autonomously analyzes finance data from the database,
+    generates insights, KPIs, risks, and policy optimization suggestions.
+    """
+    try:
+        # Run the finance AI agent
+        result = run_finance_agent(
+            start_date=body.start_date,
+            end_date=body.end_date
+        )
+
+        # Construct response in unified structure
+        response = FinanceInsightsResponse(
+            ok=True,
+            generated_at=datetime.datetime.utcnow().isoformat(),
+            executive_summary=result.get("executive_summary"),
+            key_metrics=result.get("key_metrics"),
+            insights=result.get("insights"),
+            policy_optimizations=result.get("policy_optimizations"),
+            risk_alerts=result.get("risk_alerts"),
+            actions=result.get("actions"),
+            recommended_claim_decisions=result.get("recommended_claim_decisions"),
+        )
+
+        return JSONResponse(content=jsonable_encoder(response))
+
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=500, detail=f"Finance insights generation failed: {e}")
+
 
 # ======================================================
 # ======  EMAIL UTIL ROUTES  ==========================
@@ -575,20 +636,20 @@ def sql_read(query, params=None):
     with get_connection() as conn:
         return safe_query(conn, query, params)
 
-@app.get("/claims/summary")
-def get_summary():
-    sql = """
-        SELECT 
-            COUNT(*) AS total_claims,
-            SUM(amount) AS total_amount,
-            SUM(CASE WHEN status = 'Approved' THEN 1 ELSE 0 END) AS approved,
-            SUM(CASE WHEN status = 'Rejected' THEN 1 ELSE 0 END) AS rejected,
-            SUM(CASE WHEN fraud_flag THEN 1 ELSE 0 END) AS frauds,
-            SUM(CASE WHEN auto_approved THEN 1 ELSE 0 END) AS auto_approved,
-            SUM(CASE WHEN is_duplicate THEN 1 ELSE 0 END) AS duplicates
-        FROM expense_claims;
-    """
-    return JSONResponse(content=sql_read(sql))
+# @app.get("/claims/summary")
+# def get_summary():
+#     sql = """
+#         SELECT 
+#             COUNT(*) AS total_claims,
+#             SUM(amount) AS total_amount,
+#             SUM(CASE WHEN status = 'Approved' THEN 1 ELSE 0 END) AS approved,
+#             SUM(CASE WHEN status = 'Rejected' THEN 1 ELSE 0 END) AS rejected,
+#             SUM(CASE WHEN fraud_flag THEN 1 ELSE 0 END) AS frauds,
+#             SUM(CASE WHEN auto_approved THEN 1 ELSE 0 END) AS auto_approved,
+#             SUM(CASE WHEN is_duplicate THEN 1 ELSE 0 END) AS duplicates
+#         FROM expense_claims;
+#     """
+#     return JSONResponse(content=jsonable_encoder(sql_read(sql)))
 
 @app.get("/claims/trends")
 def get_trends(start_date: date, end_date: date):

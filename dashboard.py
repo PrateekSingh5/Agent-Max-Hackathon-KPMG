@@ -369,6 +369,11 @@ import requests
 import streamlit as st
 from dotenv import load_dotenv
 
+
+import requests
+from datetime import date
+import streamlit as st
+
 # ── Streamlit page config MUST be first ────────────────────────────────────────
 # st.set_page_config(
 #     page_title="Finance Dashboard — Agent Max",
@@ -452,7 +457,6 @@ def load_summary(start_date: date = None, end_date: date = None, filters: dict =
         "approved": summary.get("approved", 0),
         "rejected": summary.get("rejected", 0),
         "auto_approved": summary.get("auto_approved", 0),
-        "duplicates": summary.get("duplicates", 0),
         "avg_amount": summary.get("avg_amount", 0.0),
         "finance_pending": summary.get("finance_pending", 0.0),
         "manager_pending": summary.get("manager_pending", 0.0),
@@ -484,18 +488,42 @@ def load_policy_compliance():
 # -------------------------
 # UI helpers
 # -------------------------
+
+# def kpi_column(label: str, value, delta=None, subtitle=None):
+#     st.markdown(
+#         f"""
+#         <div style="padding:10px;border-radius:8px;background:#f6f8fa;">
+#           <div style="font-size:14px;color:#6b7280">{label}</div>
+#           <div style="font-size:22px;font-weight:700;margin-top:6px">{value}</div>
+#           {"<div style='font-size:12px;color:#10b981;margin-top:4px;'>+" + str(delta) + "</div>" if delta is not None else ""}
+#           {"<div style='font-size:12px;color:#6b7280;margin-top:4px;'>" + subtitle + "</div>" if subtitle else ""}
+#         </div>
+#         """,
+#         unsafe_allow_html=True,
+#     )
+
 def kpi_column(label: str, value, delta=None, subtitle=None):
-    st.markdown(
-        f"""
-        <div style="padding:10px;border-radius:8px;background:#f6f8fa;">
-          <div style="font-size:14px;color:#6b7280">{label}</div>
-          <div style="font-size:22px;font-weight:700;margin-top:6px">{value}</div>
-          {"<div style='font-size:12px;color:#10b981;margin-top:4px;'>+" + str(delta) + "</div>" if delta is not None else ""}
-          {"<div style='font-size:12px;color:#6b7280;margin-top:4px;'>" + subtitle + "</div>" if subtitle else ""}
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    html = f"""
+    <div style="
+        background-color:#f6f8fa;
+        border-radius:10px;
+        padding:12px 10px;
+        text-align:center;
+        box-shadow:0 1px 3px rgba(0,0,0,0.08);
+        min-height:80px;">
+        <div style="font-size:14px;color:#6b7280;font-weight:500;">{label}</div>
+        <div style="font-size:24px;font-weight:700;margin-top:6px;color:#111827;">{value}</div>
+        {f"<div style='font-size:12px;color:#10b981;margin-top:4px;'>+{delta}</div>" if delta else ""}
+        {f"<div style='font-size:12px;color:#6b7280;margin-top:4px;'>{subtitle}</div>" if subtitle else ""}
+    </div>
+    """
+    st.markdown(html, unsafe_allow_html=True)
+
+
+# def kpi_column(label, value):
+#     st.metric(label=label, value=value)
+
+
 
 
 def df_to_csv_bytes(df: pd.DataFrame):
@@ -524,6 +552,94 @@ def apply_client_side_filters(df: pd.DataFrame, filters: dict, status_list: Opti
         out = out[out["status"].fillna("").isin(status_list)]
 
     return out
+
+import streamlit as st
+import plotly.graph_objects as go
+
+def render_status_distribution(summary: dict):
+    """
+    Renders an enterprise-style donut chart of claim status distribution
+    consistent with the design of other Plotly charts in your app.
+    """
+
+    # Prepare data
+    status_data = {
+        "Status": ["Approved", "Rejected", "Auto Approved", "Finance Pending", "Manager Pending"],
+        "Count": [
+            summary.get("approved", 0),
+            summary.get("rejected", 0),
+            summary.get("auto_approved", 0),
+            summary.get("finance_pending", 0),
+            summary.get("manager_pending", 0)
+        ],
+    }
+
+    pie_df = pd.DataFrame(status_data)
+    pie_df = pie_df[pie_df["Count"] > 0]  # remove zero-count statuses
+
+    if pie_df.empty:
+        st.info("No claim status data available.")
+        return
+
+    # Create donut chart
+    fig = px.pie(
+        pie_df,
+        names="Status",
+        values="Count",
+        hole=0.6,
+        color="Status",
+        color_discrete_map={
+            "Approved": "#16a34a",        # green
+            "Rejected": "#dc2626",        # red
+            "Auto Approved": "#3b82f6",   # blue
+            "Finance Pending": "#f59e0b", # amber
+            "Manager Pending": "#6b7280"  # gray
+        },
+    )
+
+    # Update trace visuals
+    fig.update_traces(
+        textinfo="label+value",
+        hovertemplate="%{label}: %{value} claims<extra></extra>",
+        textfont_size=13,
+        marker=dict(line=dict(color="#ffffff", width=2))
+    )
+
+    # Add total in center
+    total_claims = int(pie_df["Count"].sum())
+    fig.add_annotation(
+        text=f"<b>{total_claims}</b><br>Total Claims",
+        x=0.5,
+        y=0.5,
+        font=dict(size=16, color="#111827"),
+        showarrow=False
+    )
+
+    # Layout customization
+    fig.update_layout(
+        title={
+            "text": "Claim Status Distribution",
+            "x": 0.5,
+            "xanchor": "center",
+            "font": dict(size=18, color="#111827", family="Inter, sans-serif")
+        },
+        margin=dict(t=50, b=30, l=10, r=10),
+        showlegend=True,
+        legend=dict(
+            orientation="h",
+            y=-0.15,
+            x=0.25,
+            font=dict(size=12)
+        ),
+        height=400,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)"
+    )
+
+    # Render
+    st.plotly_chart(fig, use_container_width=True)
+
+
 
 
 # -------------------------
@@ -591,6 +707,7 @@ def main():
             df_claims = apply_client_side_filters(df_claims_raw, filters, status_choice)
 
             summary = load_summary(start_date, end_date, filters)
+            # print(summary)
             monthly = load_monthly_trend(start_date, end_date, filters)
             top_vendors = load_top_vendors(start_date, end_date, filters, limit=10)
             policy_df = load_policy_compliance()
@@ -603,9 +720,13 @@ def main():
             else:
                 pending_df = df_claims[df_claims["status"].fillna("").str.strip().isin(pending_statuses)].copy()
 
+
         # ------------- KPIs -------------
         st.markdown("### KPIs")
+
         k1, k2, k3, k4, k5, k6 = st.columns(6)
+        
+
         with k1:
             kpi_column("Total Claims", f"{summary['total_claims']:,}")
         with k2:
@@ -613,12 +734,12 @@ def main():
         with k3:
             kpi_column("Avg Claim Amount", f"₹{int(summary['avg_amount']):,}")
         with k4:
-            kpi_column("Auto-approved", f"{summary['auto_approved']:,}")
+            kpi_column("Approved", f"{summary['approved']:,}")
         with k5:
             kpi_column("Manager Pending", f"{summary['manager_pending']:,}")
         with k6:
             kpi_column("Finance Pending", f"{summary['finance_pending']:,}")
-
+                
         st.markdown("---")
 
         # ------------- VISUALS -------------
@@ -660,6 +781,7 @@ def main():
             st.subheader("Pending Claims")
             if pending_df.empty:
                 st.write("No pending claims.")
+
             else:
                 pie_df = pending_df.groupby("expense_category", dropna=False).size().reset_index(name="value")
                 pie_df["expense_category"] = pie_df["expense_category"].fillna("(unknown)")
@@ -671,6 +793,10 @@ def main():
                     showlegend=True,
                 )
                 st.plotly_chart(fig, use_container_width=True)
+    
+
+            st.markdown("### Claim Status Overview")
+            render_status_distribution(summary)
 
         # ------------- TABLE + EXPORT -------------
         st.markdown("---")
@@ -697,6 +823,116 @@ def main():
             )
 
 
-# # Ensure app runs in Streamlit
-# if __name__ == "__main__":
-#     main()
+
+    # -------------------------------------------------------------------
+    # AI Finance Insights Section
+    # -------------------------------------------------------------------
+    st.markdown("## 🤖 AI-Powered Finance Insights")
+    st.caption("Autonomous finance intelligence generated from your database by the AI agent.")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        ai_start_date = st.date_input("Start Date (for AI analysis)", date(2025, 1, 1), key="ai_start")
+    with col2:
+        ai_end_date = st.date_input("End Date (for AI analysis)", date.today(), key="ai_end")
+
+    if st.button("🚀 Run AI Finance Analysis"):
+        with st.spinner("AI Agent analyzing financial data..."):
+            try:
+                api_url = "http://localhost:8000/api/ai/finance-insights"
+                payload = {
+                    "start_date": ai_start_date.isoformat(),
+                    "end_date": ai_end_date.isoformat(),
+                    "include_ai_recommendations": True
+                }
+                response = requests.post(api_url, json=payload)
+                response.raise_for_status()
+                ai_data = response.json()
+            except Exception as e:
+                st.error(f"❌ Error fetching AI insights: {e}")
+                st.stop()
+
+        st.success("✅ AI Insights generated successfully")
+
+        # -------------------------------------------------------------------
+        # Executive Summary
+        # -------------------------------------------------------------------
+        st.markdown("### 🧾 Executive Summary")
+        st.write(ai_data.get("executive_summary", "No summary available."))
+
+        # -------------------------------------------------------------------
+        # Key Metrics Cards
+        # -------------------------------------------------------------------
+        st.markdown("### 📊 Key Metrics")
+        metrics = ai_data.get("key_metrics", {})
+        c1, c2, c3, c4, c5, c6 = st.columns(6)
+        c1.metric("Total Claims", f"{metrics.get('total_claims', 0):,}")
+        c2.metric("Total Spend", f"₹{metrics.get('total_spend', 0):,.0f}")
+        c3.metric("Avg Claim", f"₹{metrics.get('avg_claim_amount', 0):,.0f}")
+        c4.metric("Auto-Approval %", f"{metrics.get('auto_approval_rate', 0)*100:.1f}%")
+        c5.metric("Fraud Flags", f"{metrics.get('fraud_flags', 0):,}")
+        c6.metric("Duplicates", f"{metrics.get('duplicates', 0):,}")
+
+        # -------------------------------------------------------------------
+        # Insights
+        # -------------------------------------------------------------------
+        st.markdown("### 💡 AI-Detected Insights")
+        insights = ai_data.get("insights", [])
+        if insights:
+            for i in insights:
+                st.markdown(f"- {i}")
+        else:
+            st.info("No insights detected for this period.")
+
+        # -------------------------------------------------------------------
+        # Policy Optimization Suggestions
+        # -------------------------------------------------------------------
+        st.markdown("### ⚙️ Policy Optimization Suggestions")
+        policies = ai_data.get("policy_optimizations", [])
+        if policies:
+            for p in policies:
+                st.markdown(f"- {p}")
+        else:
+            st.info("No policy optimization suggestions available.")
+
+        # -------------------------------------------------------------------
+        # Risk Alerts
+        # -------------------------------------------------------------------
+        st.markdown("### 🚨 Risk Alerts")
+        risks = ai_data.get("risk_alerts", [])
+        if risks:
+            for r in risks:
+                st.markdown(f"- {r}")
+        else:
+            st.success("No high-risk alerts identified.")
+
+        # -------------------------------------------------------------------
+        # Actions
+        # -------------------------------------------------------------------
+        st.markdown("### 🧠 Recommended Actions")
+        actions = ai_data.get("actions", [])
+        if actions:
+            for a in actions:
+                st.markdown(f"- {a}")
+        else:
+            st.info("No immediate actions recommended.")
+
+        # -------------------------------------------------------------------
+        # Recommended Claim-Level Decisions
+        # -------------------------------------------------------------------
+        st.markdown("### 🧍‍♂️ AI-Recommended Claim Decisions")
+        claim_recs = ai_data.get("recommended_claim_decisions", [])
+        if not claim_recs:
+            st.info("No claim-level AI recommendations available.")
+        else:
+            for rec in claim_recs:
+                with st.expander(f"Claim {rec['claim_id']} — {rec.get('employee_name', 'N/A')}"):
+                    st.write(f"**Amount:** ₹{rec['amount']:,.2f}")
+                    st.write(f"**Category:** {rec['category']}")
+                    st.write(f"**AI Suggested Decision:** {rec['ai_decision']}")
+                    st.write(f"**Reason:** {rec['reason']}")
+
+
+    # # Ensure app runs in Streamlit
+    # if __name__ == "__main__":
+    #     main()
